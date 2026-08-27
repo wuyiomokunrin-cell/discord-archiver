@@ -83,6 +83,10 @@ python main.py dashboard    # http://localhost:8080
 Then `python main.py listen` whenever you want live capture running. Ctrl-C
 stops it cleanly and flushes any pending attachment downloads.
 
+Only one archiver process may run at a time; a second one exits immediately with
+a message rather than corrupting the database. Find a stray one with
+`pgrep -af "main.py"`.
+
 `backfill` handles SIGINT as a pause: kill it mid-run and restart, and it resumes
 from the last checkpoint rather than re-reading the channel. It prints an
 explicit `BACKFILL COMPLETE` or `BACKFILL PAUSED` block at the end so you are
@@ -187,7 +191,7 @@ Worth knowing before you rely on the output:
 python -m unittest discover -s tests -t . -v
 ```
 
-86 tests covering the storage layer (dedupe, edit/delete logging, resumable
+96 tests covering the storage layer (dedupe, edit/delete logging, resumable
 cursors, foreign-key enforcement), cold-start capture against an empty
 database, the export layer (XSS escaping, format consistency, schema
 integrity), config loading, listener scope and intents, and a full

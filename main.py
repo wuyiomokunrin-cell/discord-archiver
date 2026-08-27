@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import fcntl
+import os
 import logging
 import signal
 import sys
@@ -54,6 +56,52 @@ async def _resolve_guild(client: discord.Client, guild_id: int) -> discord.Guild
     return guild
 
 
+CHUNK_TIMEOUT = 60.0
+
+
+async def _chunk_guild(guild) -> None:
+    """Fetch the member list, but never let it block the archive.
+
+    guild.chunk() waits for GUILD_MEMBERS_CHUNK frames from the gateway. If
+    they never arrive it waits forever, and because the backfill awaits it
+    before doing anything else, the whole run hangs after printing only
+    "connected". The roster is a nicety; message history is the point.
+    """
+    log.info("fetching member list for %s ...", guild.name)
+    try:
+        await asyncio.wait_for(guild.chunk(), timeout=CHUNK_TIMEOUT)
+        log.info("member list ready: %d members", len(guild.members))
+    except asyncio.TimeoutError:
+        log.warning(
+            "member list did not arrive within %.0fs; continuing without it. "
+            "Message archiving is unaffected - only the roster may be partial. "
+            "Check that SERVER MEMBERS INTENT is enabled in the Developer Portal.",
+            CHUNK_TIMEOUT)
+    except Exception as exc:  # noqa: BLE001 - never let this stop the archive
+        log.warning("could not fetch member list (%s); continuing", exc)
+
+
+def acquire_lock(db_path) -> "object":
+    """Take an exclusive flock on the database so two processes cannot write it.
+
+    flock is released automatically if the process dies, so a crash cannot
+    leave a stale lock behind.
+    """
+    lock_path = str(db_path) + ".lock"
+    fh = open(lock_path, "w")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        raise SystemExit(
+            "Another archiver process is already using this database.\n"
+            "  -> Find it with:  pgrep -af \"main.py\"\n"
+            "  -> Only one may run at a time; SQLite allows a single writer.")
+    fh.write(str(os.getpid()))
+    fh.flush()
+    return fh
+
+
 def _fmt_duration(seconds: float) -> str:
     seconds = int(seconds)
     h, rem = divmod(seconds, 3600)
@@ -79,6 +127,7 @@ async def run_command(cfg, body) -> int:
     traceback plus an aiohttp "Unclosed connector" warning, which reads like a
     crash even though the fix is a typo in .env.
     """
+    acquire_lock(cfg.db_path)
     db = Database(cfg.db_path)
     client = make_client(db, guild_id=cfg.guild_id,
                          capture_edits=cfg.capture_edits,
@@ -138,12 +187,7 @@ async def run_command(cfg, body) -> int:
 async def _backfill_body(client: discord.Client, db: Database, cfg) -> None:
     guild = await _resolve_guild(client, cfg.guild_id)
 
-    # The member cache is only fully populated for small guilds; chunk it so the
-    # roster in the archive is complete rather than partial.
-    try:
-        await guild.chunk()
-    except Exception:
-        log.warning("could not chunk member list; roster may be incomplete")
+    await _chunk_guild(guild)
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -204,10 +248,7 @@ async def _listen_body(client: discord.Client, db: Database, cfg) -> None:
 
     # Catalogue on startup so `listen` works on a fresh database and so the
     # roster and role list are complete rather than filled in message by message.
-    try:
-        await guild.chunk()
-    except Exception:
-        log.warning("could not chunk member list; roster may be incomplete")
+    await _chunk_guild(guild)
     try:
         from archiver.backfill import catalog_guild
         await catalog_guild(db, guild)
