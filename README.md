@@ -81,7 +81,7 @@ cp .env.example .env    # then fill in DISCORD_BOT_TOKEN and DISCORD_GUILD_ID
 | `python main.py stats` | no | Print archive counts. |
 | `python main.py progress` | no | Per-channel backfill status. |
 | `python main.py audit` | no | Recent recorded server changes. |
-| `python main.py dashboard` | no | Serve the local dashboard. |
+| `python main.py dashboard` | no | Serve the local dashboard (or `scripts/dashboard.sh`, which activates the venv for you). |
 
 Typical first run:
 
