@@ -46,7 +46,7 @@ class ArchiverClient(discord.Client):
         self.capture_edits = capture_edits
         self.capture_deletes = capture_deletes
         self.mirror = mirror
-        self.counters = {"messages": 0, "edits": 0, "deletes": 0, "reactions": 0, "skipped": 0}
+        self.counters = {"messages": 0, "edits": 0, "deletes": 0, "reactions": 0, "skipped": 0, "pings": 0, "audit": 0}
 
     # ------------------------------------------------------------------ util
 
@@ -54,6 +54,15 @@ class ArchiverClient(discord.Client):
         if self.target_guild_id is None:
             return True
         return guild_id == self.target_guild_id
+
+    # ------------------------------------------------------------------ ping
+
+    def _is_ping(self, message: discord.Message) -> bool:
+        """A latency check: '!ping' anywhere, or mentioning the bot with ping."""
+        content = (message.content or "").strip().lower()
+        if content.startswith("!ping"):
+            return True
+        return bool(self.user) and "ping" in content and self.user.mentioned_in(message)
 
     # ---------------------------------------------------------------- events
 
@@ -70,6 +79,15 @@ class ArchiverClient(discord.Client):
         if message.author.id == self.user.id:
             self.counters["skipped"] += 1
             return
+        if self._is_ping(message):
+            try:
+                await message.reply(
+                    f"pong - gateway latency {round(self.latency * 1000)} ms",
+                    allowed_mentions=discord.AllowedMentions.none())
+                self.counters["pings"] += 1
+            except discord.Forbidden:
+                log.warning("cannot reply to ping: bot lacks Send Messages. "
+                            "Re-invite it with permissions=68736.")
         try:
             capture_message(self.db, message)
             self.counters["messages"] += 1
@@ -137,6 +155,66 @@ class ArchiverClient(discord.Client):
         if not self._in_scope(member.guild.id):
             return
         self.db.mark_member_left(str(member.id))
+
+    # ------------------------------------------------------- server changes
+
+    def _audit(self, guild, event: str, target_type: str, target_id=None,
+               target_name=None, actor=None, changes=None) -> None:
+        if not self._in_scope(getattr(guild, "id", None)):
+            return
+        from .audit import record_live
+        record_live(self.db, getattr(guild, "id", 0), event, target_type,
+                    target_id, target_name, actor, changes)
+        self.counters["audit"] += 1
+
+    async def on_guild_channel_create(self, channel) -> None:
+        self._audit(channel.guild, "channel.create", "channel",
+                    channel.id, getattr(channel, "name", None))
+
+    async def on_guild_channel_delete(self, channel) -> None:
+        self._audit(channel.guild, "channel.delete", "channel",
+                    channel.id, getattr(channel, "name", None))
+
+    async def on_guild_channel_update(self, before, after) -> None:
+        from .audit import diff
+        self._audit(after.guild, "channel.update", "channel", after.id,
+                    getattr(after, "name", None),
+                    changes=diff(before, after,
+                                 ["name", "topic", "position", "nsfw", "slowmode_delay"]))
+
+    async def on_guild_role_create(self, role) -> None:
+        self._audit(role.guild, "role.create", "role", role.id, role.name)
+
+    async def on_guild_role_delete(self, role) -> None:
+        self._audit(role.guild, "role.delete", "role", role.id, role.name)
+
+    async def on_guild_role_update(self, before, after) -> None:
+        from .audit import diff
+        self._audit(after.guild, "role.update", "role", after.id, after.name,
+                    changes=diff(before, after,
+                                 ["name", "colour", "position", "permissions"]))
+
+    async def on_member_join(self, member: discord.Member) -> None:
+        self._audit(member.guild, "member.join", "member",
+                    member.id, member.display_name)
+
+    async def on_member_ban(self, guild, user) -> None:
+        self._audit(guild, "member.ban", "member", user.id, getattr(user, "name", None))
+
+    async def on_member_unban(self, guild, user) -> None:
+        self._audit(guild, "member.unban", "member", user.id, getattr(user, "name", None))
+
+    async def on_member_update(self, before, after) -> None:
+        from .audit import diff
+        self._audit(after.guild, "member.update", "member", after.id,
+                    after.display_name,
+                    changes=diff(before, after,
+                                 ["nick", "display_name", "roles", "timed_out_until"]))
+
+    async def on_guild_update(self, before, after) -> None:
+        from .audit import diff
+        self._audit(after, "guild.update", "guild", after.id, after.name,
+                    changes=diff(before, after, ["name", "description"]))
 
 
 def make_client(db: Database, *, guild_id: int | None, capture_edits: bool,

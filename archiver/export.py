@@ -371,4 +371,12 @@ def export_server_info(db: Database, guild_id: str, out_dir: str | Path) -> dict
         for c in info["channels"]:
             w.writerow(c)
 
-    return {"json": json_path, "members_csv": members_csv, "channels_csv": channels_csv}
+    roles_csv = out_dir / "roles.csv"
+    with roles_csv.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=["id", "name", "colour", "position"])
+        w.writeheader()
+        for r in info["roles"]:
+            w.writerow(r)
+
+    return {"json": json_path, "members_csv": members_csv,
+            "channels_csv": channels_csv, "roles_csv": roles_csv}

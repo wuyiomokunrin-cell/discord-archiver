@@ -140,6 +140,21 @@ CREATE TABLE IF NOT EXISTS sync_state (
     updated_at           TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS audit_events (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id     TEXT NOT NULL,
+    event        TEXT NOT NULL,
+    target_type  TEXT,
+    target_id    TEXT,
+    target_name  TEXT,
+    actor_id     TEXT,
+    actor_name   TEXT,
+    before_json  TEXT,
+    after_json   TEXT,
+    captured_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_guild_time ON audit_events(guild_id, id);
+
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -507,6 +522,35 @@ class Database:
             (str(guild_id) if guild_id else None,
              str(guild_id) if guild_id else None),
         ).fetchall()
+
+    # --------------------------------------------------------------- audit
+
+    def add_audit_event(self, guild_id: str, event: str, target_type: str | None,
+                        target_id: str | None, target_name: str | None,
+                        actor_id: str | None, actor_name: str | None,
+                        before_json: str | None, after_json: str | None,
+                        captured_at: str | None = None) -> None:
+        self.conn.execute(
+            """INSERT INTO audit_events(guild_id, event, target_type, target_id,
+                                        target_name, actor_id, actor_name,
+                                        before_json, after_json, captured_at)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (str(guild_id), event, target_type, target_id, target_name,
+             actor_id, actor_name, before_json, after_json,
+             captured_at or utcnow()),
+        )
+        self.conn.commit()
+
+    def audit_events(self, guild_id: str | None = None, limit: int = 200
+                     ) -> list[sqlite3.Row]:
+        sql = "SELECT * FROM audit_events"
+        params: list = []
+        if guild_id is not None:
+            sql += " WHERE guild_id = ?"
+            params.append(str(guild_id))
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        return self.conn.execute(sql, params).fetchall()
 
     # -------------------------------------------------------------- queries
 

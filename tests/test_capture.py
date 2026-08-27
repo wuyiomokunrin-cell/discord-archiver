@@ -258,7 +258,8 @@ class TestServerInfo(unittest.TestCase):
     def test_export_server_info_writes_three_files(self):
         with TemporaryDirectory() as d:
             paths = ex.export_server_info(self.db, "111", Path(d) / "info")
-            self.assertEqual(set(paths), {"json", "members_csv", "channels_csv"})
+            self.assertEqual(set(paths), {"json", "members_csv", "channels_csv",
+                                          "roles_csv"})
             data = json.loads(paths["json"].read_text(encoding="utf-8"))
             self.assertEqual(data["guild"]["id"], "111")
             members = list(csv.DictReader(

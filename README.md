@@ -35,18 +35,28 @@ user token) are bannable outright — this project deliberately doesn't do that.
 
 ### 2. Invite it
 
-Read-only (archiving only) — `permissions=66560`, which is exactly
-`VIEW_CHANNEL | READ_MESSAGE_HISTORY`:
+Recommended (archiving + ping + audit log) — `permissions=68736`, which is
+`VIEW_CHANNEL | READ_MESSAGE_HISTORY | SEND_MESSAGES | VIEW_AUDIT_LOG`:
+
+```
+https://discord.com/api/oauth2/authorize?client_id=YOUR_APP_ID&scope=bot&permissions=68736
+```
+
+- `SEND_MESSAGES` is only needed for the `!ping` latency reply.
+- `VIEW_AUDIT_LOG` is only needed to pull the offline audit log; live
+  change events work without it.
+
+Minimal (archiving only) — `permissions=66560` (`VIEW_CHANNEL | READ_MESSAGE_HISTORY`):
 
 ```
 https://discord.com/api/oauth2/authorize?client_id=YOUR_APP_ID&scope=bot&permissions=66560
 ```
 
-With mirroring enabled — `permissions=536988672`, adding
-`SEND_MESSAGES | EMBED_LINKS | ATTACH_FILES | MANAGE_WEBHOOKS`:
+With mirroring enabled — `permissions=536988800`, adding
+`EMBED_LINKS | ATTACH_FILES | MANAGE_WEBHOOKS`:
 
 ```
-https://discord.com/api/oauth2/authorize?client_id=YOUR_APP_ID&scope=bot&permissions=536988672
+https://discord.com/api/oauth2/authorize?client_id=YOUR_APP_ID&scope=bot&permissions=536988800
 ```
 
 **Do not grant Administrator.** The bot needs to read, not to manage.
@@ -70,6 +80,7 @@ cp .env.example .env    # then fill in DISCORD_BOT_TOKEN and DISCORD_GUILD_ID
 | `python main.py info` | no | Write the server-info report. |
 | `python main.py stats` | no | Print archive counts. |
 | `python main.py progress` | no | Per-channel backfill status. |
+| `python main.py audit` | no | Recent recorded server changes. |
 | `python main.py dashboard` | no | Serve the local dashboard. |
 
 Typical first run:
@@ -119,6 +130,8 @@ archiver/
   attachments.py CDN download, SHA-256 content addressing, dedupe
   export.py      schema-driven JSON / CSV / HTML + server-info report
   mirror.py      optional webhook mirroring into a second server
+  audit.py       server-change capture: live events + offline audit-log pull
+  lock.py        cross-platform single-instance lock (POSIX + Windows)
 dashboard/       Flask app, read-only, no Discord calls
 ```
 
@@ -178,6 +191,35 @@ Worth knowing before you rely on the output:
   rate-limited by Discord. A server with millions of messages will take hours.
   That's inherent, not a bug.
 
+## Live features while listening
+
+`python main.py listen` also:
+
+- **Answers `!ping`** (or a mention with "ping") with the gateway latency in ms.
+  Needs `SEND_MESSAGES`.
+- **Records edits and deletions** of archived messages (already on by default).
+- **Captures server changes as they happen**: channel/role create-update-delete,
+  member join/leave/ban/unban, nickname and role changes, guild renames. See
+  them with `python main.py audit` or `/api/audit` on the dashboard.
+- **Pulls the audit log on startup** to catch changes that happened while the
+  bot was offline. Needs `VIEW_AUDIT_LOG`; skipped gracefully without it.
+
+## Running on Windows (dual boot)
+
+The code is cross-platform. The only differences from Linux/macOS:
+
+```
+python -m venv .venv
+.venv\Scripts\activate        <- note: Scripts, not bin
+pip install -r requirements.txt
+```
+
+Everything else (`python main.py backfill` etc.) is identical. The run lock
+uses `msvcrt.locking` on Windows instead of `fcntl.flock`, so two instances are
+still prevented. Clone the same repo on both OSes; they share nothing except
+your Discord credentials, and each keeps its own `data/` folder - so a Windows
+run starts a fresh archive unless you copy `data/` across.
+
 ## Privacy
 
 - `data/` and `.env` are git-ignored. The database contains other people's
@@ -192,7 +234,7 @@ Worth knowing before you rely on the output:
 python -m unittest discover -s tests -t . -v
 ```
 
-116 tests covering the storage layer (dedupe, edit/delete logging, resumable
+131 tests covering the storage layer (dedupe, edit/delete logging, resumable
 cursors, foreign-key enforcement), cold-start capture against an empty
 database, the export layer (XSS escaping, format consistency, schema
 integrity), config loading, listener scope and intents, and a full

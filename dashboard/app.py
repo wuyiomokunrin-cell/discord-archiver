@@ -88,6 +88,22 @@ def create_app(db_path: str | Path) -> Flask:
             rows = c.execute("SELECT * FROM members ORDER BY name").fetchall()
         return jsonify([dict(r) for r in rows])
 
+    @app.route("/api/roles")
+    def api_roles():
+        with conn() as c:
+            rows = c.execute(
+                "SELECT * FROM roles ORDER BY position DESC, name").fetchall()
+        return jsonify([dict(r) for r in rows])
+
+    @app.route("/api/audit")
+    def api_audit():
+        limit = min(int(request.args.get("limit", 100)), 500)
+        with conn() as c:
+            rows = c.execute(
+                "SELECT * FROM audit_events ORDER BY id DESC LIMIT ?",
+                (limit,)).fetchall()
+        return jsonify([dict(r) for r in rows])
+
     @app.route("/api/search")
     def api_search():
         q = (request.args.get("q") or "").strip()

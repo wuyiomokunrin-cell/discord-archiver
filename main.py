@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import fcntl
-import os
 import logging
 import signal
 import sys
@@ -23,6 +21,7 @@ from pathlib import Path
 import discord
 
 from archiver import attachments as att_mod
+from archiver import lock as lock_mod
 from archiver import export as export_mod
 from archiver.backfill import backfill_guild
 from archiver.config import load as load_config
@@ -81,27 +80,6 @@ async def _chunk_guild(guild) -> None:
         log.warning("could not fetch member list (%s); continuing", exc)
 
 
-def acquire_lock(db_path) -> "object":
-    """Take an exclusive flock on the database so two processes cannot write it.
-
-    flock is released automatically if the process dies, so a crash cannot
-    leave a stale lock behind.
-    """
-    lock_path = str(db_path) + ".lock"
-    fh = open(lock_path, "w")
-    try:
-        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        fh.close()
-        raise SystemExit(
-            "Another archiver process is already using this database.\n"
-            "  -> Find it with:  pgrep -af \"main.py\"\n"
-            "  -> Only one may run at a time; SQLite allows a single writer.")
-    fh.write(str(os.getpid()))
-    fh.flush()
-    return fh
-
-
 def _fmt_duration(seconds: float) -> str:
     seconds = int(seconds)
     h, rem = divmod(seconds, 3600)
@@ -127,7 +105,7 @@ async def run_command(cfg, body) -> int:
     traceback plus an aiohttp "Unclosed connector" warning, which reads like a
     crash even though the fix is a typo in .env.
     """
-    acquire_lock(cfg.db_path)
+    lock_mod.acquire(cfg.db_path)
     db = Database(cfg.db_path)
     client = make_client(db, guild_id=cfg.guild_id,
                          capture_edits=cfg.capture_edits,
@@ -259,6 +237,13 @@ async def _listen_body(client: discord.Client, db: Database, cfg) -> None:
     except Exception:
         log.exception("catalogue failed; continuing with on-demand capture")
 
+    # Record any changes that happened while the bot was offline.
+    try:
+        from archiver.audit import pull_audit_logs
+        await pull_audit_logs(db, guild)
+    except Exception:
+        log.exception("audit-log pull failed; continuing")
+
     mirror = None
     if cfg.mirror_enabled and cfg.mirror_guild_id:
         mirror = Mirror(client, source_guild_id=cfg.guild_id,
@@ -324,6 +309,28 @@ def cmd_stats(cfg, args) -> None:
     stats = db.stats(str(cfg.guild_id) if cfg.guild_id else None)
     for k, v in stats.items():
         print(f"  {k:26s} {v}")
+    db.close()
+
+
+def cmd_audit(cfg, args) -> None:
+    """Show the most recent server changes the bot has recorded."""
+    db = Database(cfg.db_path)
+    rows = db.audit_events(str(cfg.guild_id) if cfg.guild_id else None,
+                           limit=args.limit)
+    if not rows:
+        print("No server changes recorded yet. Run `python main.py listen` to "
+              "start capturing them.")
+        db.close()
+        return
+    print(f"{len(rows)} most recent server change(s):\n")
+    for r in reversed(rows):
+        when = (r["captured_at"] or "").replace("T", " ")[:19]
+        actor = r["actor_name"] or "-"
+        target = r["target_name"] or r["target_id"] or "-"
+        line = f"  {when}  {r['event']:16s} {r['target_type']:8s} {target}"
+        if r["after_json"]:
+            line += f"  by={actor}  {r['after_json']}"
+        print(line)
     db.close()
 
 
@@ -402,6 +409,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("progress", help="show per-channel backfill status")
 
+    a = sub.add_parser("audit", help="show recorded server changes")
+    a.add_argument("--limit", type=int, default=100)
+
     a = sub.add_parser("attachments", help="download pending attachments")
     a.set_defaults(func=cmd_attachments)
 
@@ -442,6 +452,8 @@ def main(argv: list[str] | None = None) -> int:
         cmd_stats(cfg, args)
     elif args.command == "progress":
         cmd_progress(cfg, args)
+    elif args.command == "audit":
+        cmd_audit(cfg, args)
     elif args.command == "attachments":
         cmd_attachments(cfg, args)
     elif args.command == "dashboard":

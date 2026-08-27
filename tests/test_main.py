@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import main as cli
+from archiver import lock
 
 
 class FakeGuild:
@@ -57,10 +58,10 @@ class TestRunLock(unittest.TestCase):
     def test_second_process_is_refused(self):
         with TemporaryDirectory() as d:
             db = Path(d) / "archive.sqlite3"
-            first = cli.acquire_lock(db)
+            first = lock.acquire(db)
             try:
                 with self.assertRaises(SystemExit) as ctx:
-                    cli.acquire_lock(db)
+                    lock.acquire(db)
                 self.assertIn("already using this database", str(ctx.exception))
             finally:
                 first.close()
@@ -69,16 +70,16 @@ class TestRunLock(unittest.TestCase):
         """flock releases on close, so a crash cannot strand the lock."""
         with TemporaryDirectory() as d:
             db = Path(d) / "archive.sqlite3"
-            first = cli.acquire_lock(db)
+            first = lock.acquire(db)
             first.close()
-            second = cli.acquire_lock(db)  # must not raise
+            second = lock.acquire(db)  # must not raise
             second.close()
 
     def test_lock_file_holds_the_pid(self):
         import os
         with TemporaryDirectory() as d:
             db = Path(d) / "archive.sqlite3"
-            fh = cli.acquire_lock(db)
+            fh = lock.acquire(db)
             try:
                 self.assertEqual(Path(str(db) + ".lock").read_text(), str(os.getpid()))
             finally:
