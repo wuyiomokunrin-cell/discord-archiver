@@ -272,6 +272,24 @@ collapse), channels beneath them, and threads nested under their parent channel.
 Messages render their embeds and attachments, and the Members tab groups people
 by their highest role in hierarchy order, like Discord's member list.
 
+## Running in Docker
+
+A `Dockerfile` and `docker-compose.yml` are provided. The archive lives under
+`$ARCHIVER_DATA_DIR` (set to `/data` in the image) which you mount as a volume,
+so data survives rebuilds. Credentials come from the environment / `env_file`,
+never the image.
+
+```
+docker compose up -d            # starts archiver + dashboard (:8080)
+docker compose run --rm archiver python main.py backfill
+```
+
+Layout inside the volume mirrors the normal one: `archive.sqlite3`,
+`attachments/`, `exports/`. `restart: unless-stopped` gives boot-time autostart
+as long as the Docker daemon starts on boot. Without Docker, the same layout and
+env vars (`DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, optional `MIRROR_*`,
+`ARCHIVER_DATA_DIR`) apply to `scripts/run.sh` and the autostart installers.
+
 ## Releases
 
 Tagged releases live at the repo's Releases page; each ships automatic
