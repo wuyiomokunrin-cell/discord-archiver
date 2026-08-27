@@ -103,6 +103,41 @@ def ensure_channel(db: Database, msg) -> bool:
     return True
 
 
+def ensure_roles(db: Database, msg) -> list[str]:
+    """Catalogue the author's roles and return their ids.
+
+    member_roles.role_id references roles(id), so every role has to exist
+    before the link can be written. Roles are otherwise only created by
+    backfill.catalog_guild(), which has not necessarily run yet - this is the
+    same race that broke ensure_channel, one level down.
+    """
+    guild = getattr(msg, "guild", None)
+    if guild is None:
+        return []
+
+    seen = getattr(db, "_seen_roles", None)
+    if seen is None:
+        seen = db._seen_roles = set()
+
+    ids: list[str] = []
+    for role in (getattr(msg.author, "roles", None) or []):
+        rid = getattr(role, "id", None)
+        if rid is None:
+            continue
+        key = str(rid)
+        if key not in seen:
+            is_bot = getattr(role, "is_bot", None)
+            db.upsert_role(
+                key, str(guild.id), getattr(role, "name", None),
+                colour=getattr(getattr(role, "colour", None), "value", None),
+                position=getattr(role, "position", None),
+                is_bot=bool(is_bot()) if callable(is_bot) else False,
+            )
+            seen.add(key)
+        ids.append(key)
+    return ids
+
+
 def ensure_author(db: Database, msg) -> None:
     author = msg.author
     if author is None or getattr(author, "id", None) is None:
@@ -110,8 +145,7 @@ def ensure_author(db: Database, msg) -> None:
     guild_id = ensure_guild(db, msg)
     if guild_id is None:
         return  # DM: no guild row to hang the member off
-    guild = getattr(msg, "guild", None)
-    role_ids = [r.id for r in getattr(author, "roles", [])] if guild else []
+    role_ids = ensure_roles(db, msg)
     db.upsert_member(
         member_id=author.id,
         guild_id=guild_id,

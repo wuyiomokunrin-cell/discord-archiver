@@ -168,10 +168,17 @@ Worth knowing before you rely on the output:
 python -m unittest discover -s tests -t . -v
 ```
 
-59 tests covering the storage layer (including dedupe, edit/delete logging,
-resumable cursors, foreign-key enforcement), the export layer (XSS escaping,
-format consistency, schema integrity), config loading, and the listener's scope
-and intent logic.
+80 tests covering the storage layer (dedupe, edit/delete logging, resumable
+cursors, foreign-key enforcement), cold-start capture against an empty
+database, the export layer (XSS escaping, format consistency, schema
+integrity), config loading, listener scope and intents, and a full
+populate -> export -> dashboard integration pass.
+
+Two of those tests exist because production found bugs the suite could not.
+`TestCaptureColdStart` runs against a completely empty database, and
+`TestCaptureColdStartWithRoles` gives the author roles - the original fixtures
+pre-created the guild and used an empty role list, which is exactly why both
+foreign-key races went unnoticed.
 
 **What is not covered:** the gateway connection itself and the CDN download
 path, both of which need live credentials and network. `capture.py` is exercised

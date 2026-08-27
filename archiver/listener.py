@@ -122,9 +122,14 @@ class ArchiverClient(discord.Client):
         if not self._in_scope(payload.guild_id):
             return
         try:
-            self.db.add_reaction(str(payload.message_id), str(payload.emoji),
-                                 str(payload.user_id))
-            self.counters["reactions"] += 1
+            if self.db.add_reaction(str(payload.message_id), str(payload.emoji),
+                                    str(payload.user_id)):
+                self.counters["reactions"] += 1
+            else:
+                # Reaction on a message that was never archived - nothing to
+                # attach it to. Not an error.
+                log.debug("ignoring reaction on unarchived message %s",
+                          payload.message_id)
         except Exception:
             log.exception("failed to record reaction on %s", payload.message_id)
 

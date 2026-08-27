@@ -162,6 +162,19 @@ async def _backfill_body(client: discord.Client, db: Database, cfg) -> None:
 
 async def _listen_body(client: discord.Client, db: Database, cfg) -> None:
     guild = await _resolve_guild(client, cfg.guild_id)
+
+    # Catalogue on startup so `listen` works on a fresh database and so the
+    # roster and role list are complete rather than filled in message by message.
+    try:
+        await guild.chunk()
+    except Exception:
+        log.warning("could not chunk member list; roster may be incomplete")
+    try:
+        from archiver.backfill import catalog_guild
+        await catalog_guild(db, guild)
+    except Exception:
+        log.exception("catalogue failed; continuing with on-demand capture")
+
     mirror = None
     if cfg.mirror_enabled and cfg.mirror_guild_id:
         mirror = Mirror(client, source_guild_id=cfg.guild_id,

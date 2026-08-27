@@ -359,3 +359,119 @@ class TestCaptureColdStart(unittest.TestCase):
         self.assertIsNotNone(g["meta_json"], "meta_json was blanked")
         self.assertIn("owner_id", g["meta_json"])
         self.assertIn("created_at", g["meta_json"])
+
+
+class TestCaptureColdStartWithRoles(unittest.TestCase):
+    """Second regression: the author has roles.
+
+    TestCaptureColdStart used the stub default of roles=[], so it never
+    exercised member_roles.role_id -> roles(id). Roles were only created by
+    catalog_guild, so a live message from a member with any role at all raised
+    IntegrityError. Every foreign key in the schema must be satisfiable from
+    the live capture path alone.
+    """
+
+    def setUp(self):
+        self.db = Database(":memory:")  # nothing pre-created
+
+    def tearDown(self):
+        self.db.close()
+
+    def _authored_message(self, mid):
+        from .stubs import FakeRole
+        author = FakeAuthor(
+            id=333, name="alice", display_name="Alice",
+            roles=[FakeRole(id=111, name="@everyone"),
+                   FakeRole(id=900, name="Admin"),
+                   FakeRole(id=901, name="Members")],
+        )
+        return make_message(mid, author=author)
+
+    def test_roles_are_created_on_demand(self):
+        self.assertTrue(capture_message(self.db, self._authored_message(1000)))
+        roles = self.db.conn.execute("SELECT id, name FROM roles ORDER BY id").fetchall()
+        self.assertEqual([r["id"] for r in roles], ["111", "900", "901"])
+        self.assertEqual([r["name"] for r in roles], ["@everyone", "Admin", "Members"])
+
+    def test_member_role_links_are_written(self):
+        capture_message(self.db, self._authored_message(1000))
+        links = self.db.conn.execute(
+            "SELECT role_id FROM member_roles WHERE member_id='333' ORDER BY role_id").fetchall()
+        self.assertEqual([l["role_id"] for l in links], ["111", "900", "901"])
+
+    def test_roles_are_not_re_inserted_per_message(self):
+        capture_message(self.db, self._authored_message(1000))
+        self.db.conn.execute("UPDATE roles SET name = 'renamed' WHERE id='900'")
+        self.db.conn.commit()
+
+        capture_message(self.db, self._authored_message(1001))
+        name = self.db.conn.execute(
+            "SELECT name FROM roles WHERE id='900'").fetchone()["name"]
+        self.assertEqual(name, "renamed", "cache failed; role row was overwritten")
+
+    def test_fully_populated_message_on_empty_database(self):
+        """Every foreign key satisfied from the live path, nothing pre-created."""
+        from .stubs import FakeAttachment, FakeEmbed, FakeReference, FakeRole
+        author = FakeAuthor(id=333, name="alice", display_name="Alice",
+                            roles=[FakeRole(id=900, name="Admin")])
+        msg = make_message(1000, author=author, content="everything at once",
+                           attachments=[FakeAttachment(id="a1", filename="x.png",
+                                                       url="https://cdn/x.png")])
+        msg.reference = FakeReference(message_id=999)
+        msg.embeds = [FakeEmbed(title="T")]
+
+        self.assertTrue(capture_message(self.db, msg))
+        self.assertTrue(self.db.add_reaction(1000, "👍", 444))
+        self.assertTrue(self.db.record_edit(1000, "edited"))
+        self.db.mark_deleted(1000)
+
+        # Integrity check across every child table.
+        self.assertEqual(self.db.conn.execute("SELECT COUNT(*) n FROM guilds").fetchone()["n"], 1)
+        self.assertEqual(self.db.conn.execute("SELECT COUNT(*) n FROM roles").fetchone()["n"], 1)
+        self.assertEqual(self.db.conn.execute("SELECT COUNT(*) n FROM member_roles").fetchone()["n"], 1)
+        self.assertEqual(len(self.db.attachments_for(1000)), 1)
+        self.assertEqual(len(self.db.edits_for(1000)), 1)
+        self.assertEqual(len(self.db.reactions_for(1000)), 1)
+        self.assertEqual(self.db.get_message(1000)["deleted"], 1)
+
+    def test_reaction_on_unarchived_message_is_ignored_not_fatal(self):
+        """on_raw_reaction_add fires for messages the backfill has not reached."""
+        self.assertFalse(self.db.add_reaction(999999, "👍", 444))
+        self.assertEqual(
+            self.db.conn.execute("SELECT COUNT(*) n FROM reactions").fetchone()["n"], 0)
+
+
+class TestForeignKeyCoverage(unittest.TestCase):
+    """Guard against the next one: assert the live path satisfies every FK."""
+
+    def test_every_fk_parent_is_reachable_from_capture(self):
+        import re
+        import sqlite3
+        from archiver.db import SCHEMA
+
+        con = sqlite3.connect(":memory:")
+        con.executescript(SCHEMA)
+        parents = set()
+        for (_tbl, sql) in con.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type='table'"):
+            for m in re.finditer(r"REFERENCES\s+(\w+)\(", sql or ""):
+                parents.add(m.group(1))
+
+        db = Database(":memory:")
+        try:
+            from .stubs import FakeRole
+            author = FakeAuthor(id=333, name="alice", display_name="Alice",
+                                roles=[FakeRole(id=900, name="Admin")])
+            capture_message(db, make_message(1000, author=author))
+
+            # After a single cold-start capture, no parent table referenced by a
+            # foreign key may still be empty.
+            for parent in sorted(parents):
+                if parent in {"messages", "reactions", "message_edits",
+                              "attachments", "sync_state", "member_roles"}:
+                    continue  # children, not parents the live path must seed
+                n = db.conn.execute(f"SELECT COUNT(*) n FROM {parent}").fetchone()["n"]
+                self.assertGreater(n, 0, f"{parent} was left empty after capture")
+        finally:
+            db.close()
+            con.close()

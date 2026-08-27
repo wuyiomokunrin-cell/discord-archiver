@@ -369,13 +369,22 @@ class Database:
         self.conn.commit()
         return True
 
-    def add_reaction(self, message_id: str, emoji: str, user_id: str) -> None:
+    def add_reaction(self, message_id: str, emoji: str, user_id: str) -> bool:
+        """Record a reaction. Returns False if the message was never archived.
+
+        reactions.message_id has a foreign key, and on_raw_reaction_add fires
+        for any message in the guild - including old ones the backfill has not
+        reached. Inserting blindly would raise IntegrityError.
+        """
+        if self.get_message(message_id) is None:
+            return False
         self.conn.execute(
             "INSERT OR IGNORE INTO reactions(message_id, emoji, user_id, captured_at) "
             "VALUES(?, ?, ?, ?)",
             (str(message_id), emoji, str(user_id), utcnow()),
         )
         self.conn.commit()
+        return True
 
     # ---------------------------------------------------------- attachments
 
