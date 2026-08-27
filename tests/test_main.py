@@ -102,3 +102,39 @@ class TestFormatDuration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDashboardSchemaHeal(unittest.TestCase):
+    """cmd_dashboard must heal schema drift (a DB predating newer tables)."""
+
+    def test_dashboard_creates_missing_tables(self):
+        import argparse
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+        import dashboard.app as dapp
+        from archiver.db import Database
+
+        tmp = Path(tempfile.mkdtemp())
+        dbp = tmp / "archive.sqlite3"
+        Database(dbp).close()
+        con = sqlite3.connect(dbp)
+        con.execute("DROP TABLE audit_events")
+        con.commit()
+        con.close()
+
+        cfg = cli.load_config(tmp / ".env")
+        cfg.db_path = dbp
+        args = argparse.Namespace(port=8080, debug=False)
+        orig = dapp.create_app
+        dapp.create_app = lambda p: type("A", (), {"run": lambda self, **k: None})()
+        try:
+            cli.cmd_dashboard(cfg, args)
+        finally:
+            dapp.create_app = orig
+
+        con = sqlite3.connect(dbp)
+        tables = [r[0] for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")]
+        con.close()
+        self.assertIn("audit_events", tables)

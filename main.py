@@ -378,6 +378,12 @@ def cmd_attachments(cfg, args) -> None:
 
 def cmd_dashboard(cfg, args) -> None:
     from dashboard.app import create_app
+    # Heal schema drift before serving: a database written by an older version
+    # may be missing newer tables (e.g. audit_events), which would otherwise
+    # 500 the endpoints that read them. init_schema only issues
+    # CREATE TABLE IF NOT EXISTS, so this never touches existing data.
+    db = Database(cfg.db_path)
+    db.close()
     app = create_app(cfg.db_path)
     print(f"dashboard on http://0.0.0.0:{args.port}")
     app.run(host="0.0.0.0", port=args.port, debug=args.debug)
