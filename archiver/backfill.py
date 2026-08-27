@@ -13,7 +13,7 @@ from typing import Any
 
 import discord
 
-from .capture import capture_message
+from .capture import capture_message, channel_category_id, role_is_bot
 from .db import Database
 
 log = logging.getLogger("archiver.backfill")
@@ -34,7 +34,7 @@ async def catalog_guild(db: Database, guild: discord.Guild) -> None:
             name=getattr(ch, "name", None),
             type_=getattr(getattr(ch, "type", None), "value", None),
             position=getattr(ch, "position", None),
-            category_id=str(getattr(getattr(ch, "category", None), "id", 0) or 0) or None,
+            category_id=channel_category_id(ch),
             topic=getattr(ch, "topic", None),
             nsfw=bool(getattr(ch, "nsfw", False)),
         )
@@ -42,7 +42,7 @@ async def catalog_guild(db: Database, guild: discord.Guild) -> None:
     for role in guild.roles:
         db.upsert_role(str(role.id), str(guild.id), role.name,
                        colour=role.colour.value, position=role.position,
-                       is_bot=role.is_bot())
+                       is_bot=role_is_bot(role))
 
     for member in guild.members:
         db.upsert_member(
@@ -61,6 +61,24 @@ async def backfill_channel(db: Database, channel: discord.TextChannel,
                            stop: asyncio.Event | None = None) -> dict[str, int]:
     """Walk one channel's history. Resumable via the sync_state cursor."""
     cid = str(channel.id)
+
+    # Every table here hangs off guilds, and sync_state hangs off channels.
+    # Ensure both parents exist before anything is written against them, so
+    # this is safe to call without catalog_guild having run first.
+    guild = getattr(channel, "guild", None)
+    guild_id = str(getattr(guild, "id", 0) or 0)
+    db.upsert_guild(guild_id, getattr(guild, "name", None) or guild_id)
+    db.upsert_channel(
+        channel_id=cid,
+        guild_id=str(getattr(getattr(channel, "guild", None), "id", 0) or 0),
+        name=getattr(channel, "name", None),
+        type_=getattr(getattr(channel, "type", None), "value", None),
+        position=getattr(channel, "position", None),
+        category_id=channel_category_id(channel),
+        topic=getattr(channel, "topic", None),
+        nsfw=bool(getattr(channel, "nsfw", False)),
+    )
+
     sync = db.get_sync(cid)
     if sync and sync["backfill_complete"]:
         return {"channel": cid, "skipped": 1, "new": 0, "seen": 0}
@@ -74,11 +92,13 @@ async def backfill_channel(db: Database, channel: discord.TextChannel,
             before = None
 
     new = seen = 0
+    interrupted = False
     buf: list[Any] = []
 
     async for msg in channel.history(limit=None, before=before, oldest_first=False):
         if stop and stop.is_set():
             log.warning("backfill of #%s interrupted by stop signal", channel.name)
+            interrupted = True
             break
         buf.append(msg)
         if len(buf) >= batch:
@@ -94,6 +114,15 @@ async def backfill_channel(db: Database, channel: discord.TextChannel,
         new += n
         seen += len(buf)
         db.set_backfill_cursor(cid, str(buf[-1].id), increment=n)
+
+    # Only a fully-walked channel may be flagged complete. Marking an
+    # interrupted one would make the next run skip it, silently archiving
+    # nothing - and sync_state has a foreign key to channels, which does not
+    # exist yet if the run stopped before the first message.
+    if interrupted:
+        log.info("#%s: paused after %d seen (%d new); will resume", channel.name, seen, new)
+        return {"channel": cid, "name": channel.name, "new": new, "seen": seen,
+                "skipped": 0, "interrupted": True}
 
     db.mark_backfill_complete(cid)
     log.info("#%s: complete. %d seen, %d new", channel.name, seen, new)

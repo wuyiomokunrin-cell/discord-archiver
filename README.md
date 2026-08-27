@@ -191,13 +191,13 @@ Worth knowing before you rely on the output:
 python -m unittest discover -s tests -t . -v
 ```
 
-96 tests covering the storage layer (dedupe, edit/delete logging, resumable
+109 tests covering the storage layer (dedupe, edit/delete logging, resumable
 cursors, foreign-key enforcement), cold-start capture against an empty
 database, the export layer (XSS escaping, format consistency, schema
 integrity), config loading, listener scope and intents, and a full
 populate -> export -> dashboard integration pass.
 
-Two of those tests exist because production found bugs the suite could not.
+Several of those tests exist because production found bugs the suite could not.
 `TestCaptureColdStart` runs against a completely empty database, and
 `TestCaptureColdStartWithRoles` gives the author roles - the original fixtures
 pre-created the guild and used an empty role list, which is exactly why both

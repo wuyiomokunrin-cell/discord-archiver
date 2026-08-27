@@ -45,6 +45,25 @@ def message_to_row(msg) -> dict[str, Any]:
     }
 
 
+def role_is_bot(role) -> bool:
+    """discord.Role exposes is_bot_managed(), not is_bot() - that is a Member
+    attribute. Guarded so a stub or a future API change cannot crash the run."""
+    fn = getattr(role, "is_bot_managed", None)
+    if callable(fn):
+        try:
+            return bool(fn())
+        except Exception:
+            return False
+    return bool(getattr(role, "is_bot", False))
+
+
+def channel_category_id(ch) -> str | None:
+    """A channel with no category must store NULL, not the string '0'."""
+    cat = getattr(ch, "category", None)
+    cid = getattr(cat, "id", None)
+    return str(cid) if cid else None
+
+
 def ensure_guild(db: Database, msg) -> str | None:
     """Make sure the guild row exists. Returns the guild id, or None for DMs.
 
@@ -95,7 +114,7 @@ def ensure_channel(db: Database, msg) -> bool:
         name=getattr(ch, "name", None),
         type_=getattr(getattr(ch, "type", None), "value", None),
         position=getattr(ch, "position", None),
-        category_id=getattr(getattr(ch, "category", None), "id", None),
+        category_id=channel_category_id(ch),
         topic=getattr(ch, "topic", None),
         nsfw=bool(getattr(ch, "nsfw", False)),
     )
@@ -126,12 +145,11 @@ def ensure_roles(db: Database, msg) -> list[str]:
             continue
         key = str(rid)
         if key not in seen:
-            is_bot = getattr(role, "is_bot", None)
             db.upsert_role(
                 key, str(guild.id), getattr(role, "name", None),
                 colour=getattr(getattr(role, "colour", None), "value", None),
                 position=getattr(role, "position", None),
-                is_bot=bool(is_bot()) if callable(is_bot) else False,
+                is_bot=role_is_bot(role),
             )
             seen.add(key)
         ids.append(key)
