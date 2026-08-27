@@ -18,7 +18,8 @@ from .db import Database
 
 log = logging.getLogger("archiver.backfill")
 
-# Channel types worth backfilling: text(0), announcement(5), forum(15).
+# Channel types worth backfilling. Forum(15) is included but handled
+# separately: a ForumChannel has no history() of its own, only threads.
 BACKFILLABLE = (discord.ChannelType.text, discord.ChannelType.news, discord.ChannelType.forum)
 
 
@@ -140,6 +141,69 @@ async def _flush(db: Database, messages: list[Any]) -> int:
     return new
 
 
+async def collect_forum_threads(forum) -> list:
+    """Active plus archived threads in a forum, deduplicated by id."""
+    found: dict[int, Any] = {}
+    for t in (getattr(forum, "threads", None) or []):
+        found[t.id] = t
+    try:
+        async for t in forum.archived_threads(limit=None):
+            found[t.id] = t
+    except discord.Forbidden:
+        log.warning("no permission to list archived threads in #%s", forum.name)
+    except discord.HTTPException:
+        log.exception("could not list archived threads in #%s", forum.name)
+    return list(found.values())
+
+
+async def backfill_forum(db: Database, forum, batch: int = 100,
+                         stop: asyncio.Event | None = None) -> dict[str, Any]:
+    """Walk every thread in a forum. The forum itself holds no messages."""
+    cid = str(forum.id)
+    guild = getattr(forum, "guild", None)
+    db.upsert_guild(str(getattr(guild, "id", 0) or 0),
+                    getattr(guild, "name", None) or "0")
+    db.upsert_channel(
+        channel_id=cid, guild_id=str(getattr(guild, "id", 0) or 0),
+        name=getattr(forum, "name", None),
+        type_=getattr(getattr(forum, "type", None), "value", None),
+        position=getattr(forum, "position", None),
+        category_id=channel_category_id(forum),
+        topic=getattr(forum, "topic", None),
+        nsfw=bool(getattr(forum, "nsfw", False)),
+    )
+
+    threads = await collect_forum_threads(forum)
+    log.info("#%s: forum with %d thread(s)", forum.name, len(threads))
+
+    interrupted = False
+    sub: list[dict[str, Any]] = []
+    for t in threads:
+        if stop and stop.is_set():
+            interrupted = True
+            break
+        try:
+            sub.append(await backfill_channel(db, t, batch=batch, stop=stop))
+        except discord.Forbidden:
+            log.warning("no permission to read thread %s - skipping", t.name)
+        except discord.HTTPException:
+            log.exception("HTTP error reading thread %s - skipping", t.name)
+        if stop and stop.is_set():
+            interrupted = True
+            break
+
+    if not interrupted:
+        db.mark_backfill_complete(cid)
+
+    return {
+        "channel": cid, "name": forum.name, "forum": True,
+        "threads": len(threads), "results": sub,
+        "new": sum(r.get("new", 0) for r in sub),
+        "seen": sum(r.get("seen", 0) for r in sub),
+        "skipped": 0, "interrupted": interrupted,
+    }
+
+
 async def backfill_guild(db: Database, guild: discord.Guild, batch: int = 100,
                          stop: asyncio.Event | None = None) -> dict[str, Any]:
     """Backfill every eligible channel in a guild."""
@@ -152,6 +216,15 @@ async def backfill_guild(db: Database, guild: discord.Guild, batch: int = 100,
     for ch in targets:
         if stop and stop.is_set():
             break
+        if ch.type == discord.ChannelType.forum:
+            results.append(await backfill_forum(db, ch, batch=batch, stop=stop))
+            continue
+        if not hasattr(ch, "history"):
+            # Defensive: an unfamiliar channel type must not abort the run.
+            # This is what would have caught the ForumChannel crash earlier.
+            log.warning("#%s is a %s with no history(); skipping",
+                        ch.name, getattr(ch.type, "name", ch.type))
+            continue
         try:
             results.append(await backfill_channel(db, ch, batch=batch, stop=stop))
         except discord.Forbidden:

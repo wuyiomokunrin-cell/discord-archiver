@@ -147,6 +147,12 @@ CREATE TABLE IF NOT EXISTS meta (
 """
 
 
+# Channel types that can hold messages, and therefore need backfilling.
+# text(0), announcement(5), news_thread(10), public_thread(11),
+# private_thread(12), forum(15). Voice(2), category(4) and stage(13) cannot.
+MESSAGE_BEARING_TYPES = (0, 5, 10, 11, 12, 15)
+
+
 def utcnow() -> str:
     """Current time as an ISO-8601 UTC string."""
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -478,7 +484,7 @@ class Database:
             """SELECT c.* FROM channels c
                LEFT JOIN sync_state s ON s.channel_id = c.id
                WHERE c.guild_id = ?
-                 AND c.type IN (0, 5, 15)
+                 AND c.type IN (0, 5, 10, 11, 12, 15)
                  AND (s.backfill_complete IS NULL OR s.backfill_complete = 0)
                ORDER BY c.position""",
             (str(guild_id),),
@@ -495,7 +501,7 @@ class Database:
                       (SELECT MAX(m.timestamp) FROM messages m WHERE m.channel_id = c.id) AS newest
                FROM channels c
                LEFT JOIN sync_state s ON s.channel_id = c.id
-               WHERE c.type IN (0, 5, 15)
+               WHERE c.type IN (0, 5, 10, 11, 12, 15)
                  AND (? IS NULL OR c.guild_id = ?)
                ORDER BY c.position, c.id""",
             (str(guild_id) if guild_id else None,

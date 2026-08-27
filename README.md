@@ -170,9 +170,10 @@ Worth knowing before you rely on the output:
 - **Edits and deletes are only caught while listening.** A message edited and
   deleted while the process was down looks like it never changed. Backfill sees
   the current state only.
-- **Forum threads and threads generally** need per-thread history walks. The
-  backfiller covers text, announcement, and forum *channels*; thread archives
-  inside them are not walked yet.
+- **Threads inside a text channel** are not walked. Forum threads are (a
+  `ForumChannel` has no `history()` of its own, so the backfiller enumerates
+  its active and archived threads and walks each). Threads opened in an
+  ordinary text channel still are not.
 - **Very large servers.** Member chunking and history pagination are
   rate-limited by Discord. A server with millions of messages will take hours.
   That's inherent, not a bug.
@@ -191,7 +192,7 @@ Worth knowing before you rely on the output:
 python -m unittest discover -s tests -t . -v
 ```
 
-109 tests covering the storage layer (dedupe, edit/delete logging, resumable
+116 tests covering the storage layer (dedupe, edit/delete logging, resumable
 cursors, foreign-key enforcement), cold-start capture against an empty
 database, the export layer (XSS escaping, format consistency, schema
 integrity), config loading, listener scope and intents, and a full

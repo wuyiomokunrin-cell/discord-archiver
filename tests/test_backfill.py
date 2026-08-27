@@ -281,3 +281,139 @@ class TestBackfillGuild(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _history_iter(messages, before=None):
+    """Async iterator over messages, newest first, honouring `before`."""
+    class _Iter:
+        def __init__(self):
+            self.items = list(messages)
+            if before is not None:
+                self.items = [m for m in self.items if m.id < before.id]
+            self.i = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self.i >= len(self.items):
+                raise StopAsyncIteration
+            m = self.items[self.i]
+            self.i += 1
+            return m
+    return _Iter()
+
+
+@dataclass
+class FakeThread:
+    id: int
+    guild: object
+    name: str = "thread"
+    type: object = field(
+        default_factory=lambda: discord.ChannelType.public_thread)
+    archived: bool = False
+    position: int | None = None
+    messages: list = field(default_factory=list)
+
+    def history(self, limit=None, before=None, oldest_first=False):
+        return _history_iter(self.messages, before)
+
+
+@dataclass
+class FakeForumChannel:
+    """A ForumChannel: no history(), only threads. This is what crashed."""
+    id: int
+    guild: object
+    name: str = "forum"
+    type: object = field(default_factory=lambda: discord.ChannelType.forum)
+    position: int = 5
+    category: object | None = None
+    topic: str | None = None
+    nsfw: bool = False
+    threads: list = field(default_factory=list)
+    archived: list = field(default_factory=list)
+
+    def archived_threads(self, limit=None, before=None):
+        return _history_iter(self.archived, before)
+
+
+class TestForumSupport(unittest.TestCase):
+    def setUp(self):
+        self.db = Database(":memory:")
+        self.guild = build_guild()
+        self.forum = FakeForumChannel(id=230, guild=self.guild, name="mappool-forum")
+        self.guild.channels.append(self.forum)
+
+        self.t1 = FakeThread(id=300, guild=self.guild, name="pool A",
+                             messages=[make_message(5000 + i, content=f"t1-{i}")
+                                       for i in reversed(range(3))])
+        self.t2 = FakeThread(id=301, guild=self.guild, name="pool B", archived=True,
+                             messages=[make_message(6000 + i, content=f"t2-{i}")
+                                       for i in reversed(range(2))])
+        # give the threads a parent so channel_category_id stays happy
+        self.t1.category = None
+        self.t2.category = None
+        self.forum.threads = [self.t1, self.t1]   # duplicate on purpose
+        self.forum.archived = [self.t2]
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_forum_channel_really_has_no_history(self):
+        """Guards the assumption the fix is built on."""
+        self.assertFalse(hasattr(FakeForumChannel, "history"))
+        self.assertTrue(hasattr(FakeThread, "history"))
+
+    def test_collect_threads_merges_active_and_archived_and_dedupes(self):
+        threads = asyncio.run(backfill.collect_forum_threads(self.forum))
+        self.assertEqual(sorted(t.id for t in threads), [300, 301])
+
+    def test_backfill_forum_archives_every_thread(self):
+        r = asyncio.run(backfill.backfill_forum(self.db, self.forum, batch=10))
+        self.assertEqual(r["threads"], 2)
+        self.assertEqual(r["new"], 5)
+        self.assertEqual(self.db.stats("111")["messages"], 5)
+        self.assertEqual(self.db.get_sync("230")["backfill_complete"], 1,
+                         "forum itself must be flagged so progress clears it")
+
+    def test_thread_rows_are_created(self):
+        asyncio.run(backfill.backfill_forum(self.db, self.forum, batch=10))
+        names = {r["name"] for r in self.db.channels(111)}
+        self.assertIn("pool A", names)
+        self.assertIn("pool B", names)
+
+    def test_backfill_guild_survives_a_forum_channel(self):
+        """The production crash: 'ForumChannel' object has no attribute 'history'."""
+        self.forum.threads = [self.t1]
+        self.forum.archived = []
+        r = asyncio.run(backfill.backfill_guild(self.db, self.guild, batch=10))
+        forums = [x for x in r["results"] if x.get("forum")]
+        self.assertEqual(len(forums), 1)
+        self.assertEqual(forums[0]["name"], "mappool-forum")
+
+    def test_unknown_channel_without_history_is_skipped_not_fatal(self):
+        class Weird:
+            id = 240
+            name = "weird"
+            type = discord.ChannelType.stage_voice
+            guild = None
+            position = 0
+        self.guild.channels.append(Weird())
+        r = asyncio.run(backfill.backfill_guild(self.db, self.guild, batch=10))
+        self.assertNotIn("weird", [x.get("name") for x in r["results"]])
+
+
+class TestThreadTypesCounted(unittest.TestCase):
+    def test_thread_and_forum_types_are_in_the_pending_query(self):
+        db = Database(":memory:")
+        try:
+            db.upsert_guild(111, "T")
+            for cid, ctype in [(1, 0), (2, 11), (3, 15), (4, 2), (5, 4)]:
+                db.upsert_channel(cid, 111, f"c{cid}", type_=ctype, position=0)
+            pending = {c["id"] for c in db.channels_needing_backfill(111)}
+            self.assertEqual(pending, {"1", "2", "3"},
+                             "text, public_thread and forum pending; voice and category not")
+            progress = {r["id"] for r in db.backfill_progress(111)}
+            self.assertEqual(progress, {"1", "2", "3"})
+        finally:
+            db.close()

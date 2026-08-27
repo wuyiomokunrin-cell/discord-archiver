@@ -205,6 +205,10 @@ async def _backfill_body(client: discord.Client, db: Database, cfg) -> None:
     for r in result["results"]:
         if r.get("skipped"):
             log.info("  %-28s already complete", r["channel"])
+        elif r.get("forum"):
+            log.info("  %-28s %6d new / %6d seen  (%d threads)",
+                     r.get("name", r["channel"]), r["new"], r["seen"],
+                     r.get("threads", 0))
         else:
             log.info("  %-28s %6d new / %6d seen", r.get("name", r["channel"]),
                      r["new"], r["seen"])
