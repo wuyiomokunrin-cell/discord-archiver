@@ -249,6 +249,18 @@ just exits with a message.
 - Give members an opt-out channel, or exclude sensitive channels by removing
   the bot's View Channel permission on them.
 
+## Releases
+
+Tagged releases live at the repo's Releases page; each ships automatic
+`Source code (zip/tar.gz)` downloads, so you can install without git:
+
+- <https://github.com/wuyiomokunrin-cell/discord-archiver/releases>
+
+To cut a new one: bump `__version__` in `archiver/__init__.py`, commit, push,
+then create a release in the GitHub UI (or API) with a tag like `v1.1.0`
+pointing at `main`. Pin downloads to a tag if you want a stable version rather
+than the moving `main`.
+
 ## Tests
 
 ```bash
