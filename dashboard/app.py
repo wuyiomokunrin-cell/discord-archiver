@@ -5,8 +5,8 @@ Runs on your machine only. Nothing here talks to Discord; it just reads SQLite.
 
 from __future__ import annotations
 
-import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from flask import Flask, Response, abort, jsonify, render_template, request
@@ -16,10 +16,13 @@ def create_app(db_path: str | Path) -> Flask:
     app = Flask(__name__)
     app.config["DB_PATH"] = str(db_path)
 
-    def conn() -> sqlite3.Connection:
+    def conn():
+        """sqlite3's own context manager only commits/rolls back - it does NOT
+        close the connection. Wrap in closing() so `with conn() as c` releases
+        the file handle."""
         c = sqlite3.connect(app.config["DB_PATH"])
         c.row_factory = sqlite3.Row
-        return c
+        return closing(c)
 
     @app.route("/")
     def index():
