@@ -9,7 +9,8 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
-from flask import Flask, Response, abort, jsonify, render_template, request
+from flask import (Flask, Response, abort, jsonify, render_template, request,
+                   send_file)
 
 
 def create_app(db_path: str | Path) -> Flask:
@@ -23,6 +24,22 @@ def create_app(db_path: str | Path) -> Flask:
         c = sqlite3.connect(app.config["DB_PATH"])
         c.row_factory = sqlite3.Row
         return closing(c)
+
+    def attach_attachments(c, rows):
+        """Attach each message's attachment rows so the UI can render images
+        and file links without an extra round-trip per message."""
+        ids = [r["id"] for r in rows]
+        if not ids:
+            return [dict(r) | {"attachments": []} for r in rows]
+        ph = ",".join("?" * len(ids))
+        atts = c.execute(
+            f"SELECT id, message_id, filename, url, local_path, content_type, "
+            f"width, height, download_status FROM attachments "
+            f"WHERE message_id IN ({ph})", ids).fetchall()
+        by: dict = {}
+        for a in atts:
+            by.setdefault(a["message_id"], []).append(dict(a))
+        return [dict(r) | {"attachments": by.get(r["id"], [])} for r in rows]
 
     @app.route("/")
     def index():
@@ -130,7 +147,8 @@ def create_app(db_path: str | Path) -> Flask:
 
         with conn() as c:
             rows = c.execute(sql, params).fetchall()
-        return jsonify([dict(r) for r in rows])
+            out = attach_attachments(c, rows)
+        return jsonify(out)
 
     @app.route("/api/channel/<channel_id>")
     def api_channel(channel_id: str):
@@ -145,7 +163,8 @@ def create_app(db_path: str | Path) -> Flask:
         params.append(limit)
         with conn() as c:
             rows = c.execute(sql, params).fetchall()
-        return jsonify([dict(r) for r in reversed(rows)])
+            out = attach_attachments(c, rows)
+        return jsonify(list(reversed(out)))
 
     @app.route("/export/<fmt>")
     def export(fmt: str):
@@ -176,6 +195,24 @@ def create_app(db_path: str | Path) -> Flask:
                                      f'attachment; filename="{p.name}"'})
         finally:
             db.close()
+
+    @app.route("/file/<att_id>")
+    def file_route(att_id: str):
+        """Serve a locally-saved attachment so image messages can embed/preview
+        it. local_path may be relative to the run directory; resolve it safely."""
+        with conn() as c:
+            row = c.execute(
+                "SELECT local_path, filename, content_type FROM attachments "
+                "WHERE id = ?", (att_id,)).fetchone()
+        if not row or not row["local_path"]:
+            abort(404)
+        p = Path(row["local_path"]).expanduser()
+        if not p.is_absolute():
+            p = Path.cwd() / p
+        if not p.is_file():
+            abort(404)
+        return send_file(p, mimetype=row["content_type"] or None,
+                         download_name=row["filename"] or p.name)
 
     return app
 

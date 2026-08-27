@@ -30,15 +30,27 @@
   li .n { color:var(--dim); font-variant-numeric:tabular-nums; }
   input { width:100%; padding:8px; background:var(--bg); color:var(--txt);
           border:1px solid var(--line); border-radius:4px; margin-bottom:10px; font-size:13px; }
+  .tabs { display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap; }
+  .tab { background:#313338; border:0; color:var(--dim); padding:6px 14px; border-radius:4px;
+         cursor:pointer; font-size:13px; }
+  .tab.active { background:var(--acc); color:#fff; }
   .msg { border-bottom:1px solid var(--line); padding:8px 0; }
   .msg:last-child { border-bottom:0; }
   .who { font-size:12px; color:var(--dim); }
   .who b { color:var(--txt); }
   .txt { white-space:pre-wrap; word-break:break-word; font-size:14px; margin-top:2px; }
+  .atts { display:flex; flex-wrap:wrap; gap:10px; margin-top:8px; align-items:flex-start; }
+  .atts img { max-width:240px; max-height:180px; border-radius:6px; display:block;
+              border:1px solid var(--line); }
+  .attlink { color:var(--acc); font-size:13px; text-decoration:none; }
+  .attlink:hover { text-decoration:underline; }
   .tag { font-size:10px; padding:1px 5px; border-radius:3px; margin-left:6px; }
   .del { background:#5c1f1f; color:#f5b5b5; }
   .edt { background:#4a3f1f; color:#f0dfa5; }
+  .bot { background:#1f3c5c; color:#a5cdf5; }
   .muted { color:var(--dim); font-size:13px; }
+  .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px;
+            vertical-align:baseline; }
 </style>
 </head>
 <body>
@@ -70,7 +82,12 @@
   </div>
 
   <div class="content">
-    <h2>Search</h2>
+    <div class="tabs">
+      <button class="tab active" data-tab="messages">Messages</button>
+      <button class="tab" data-tab="members">Members</button>
+      <button class="tab" data-tab="roles">Roles</button>
+      <button class="tab" data-tab="audit">Changes</button>
+    </div>
     <input id="q" placeholder="search message text, press Enter">
     <div id="results" class="muted">Pick a channel on the left, or search above.</div>
   </div>
@@ -78,21 +95,80 @@
 
 <script>
 const results = document.getElementById('results');
-const esc = s => (s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const qInput = document.getElementById('q');
+const esc = s => (s ?? '').replace(/[&<>\"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
+const hex = c => (!c ? null : '#' + (c >>> 0 & 0xffffff).toString(16).padStart(6, '0'));
+
+function attHtml(a) {
+  const isImg = (a.content_type || '').startsWith('image/');
+  const local = a.local_path ? '/file/' + a.id : null;
+  const href = local || a.url;
+  if (!href) return '';
+  if (isImg && local)
+    return `<a class="att" href="${href}" target="_blank" rel="noopener">` +
+           `<img loading="lazy" src="${href}" alt="${esc(a.filename)}" title="${esc(a.filename)}"></a>`;
+  return `<a class="attlink" href="${href}" target="_blank" rel="noopener">` +
+         `${isImg ? '🖼' : '📎'} ${esc(a.filename || 'attachment')}</a>`;
+}
 
 function render(msgs) {
   if (!msgs.length) { results.innerHTML = '<div class="muted">No matches.</div>'; return; }
   results.innerHTML = msgs.map(m => {
     const tags = (m.deleted ? '<span class="tag del">deleted</span>' : '')
                + (m.edited_timestamp ? '<span class="tag edt">edited</span>' : '');
+    const atts = (m.attachments && m.attachments.length)
+      ? `<div class="atts">${m.attachments.map(attHtml).join('')}</div>` : '';
     return `<div class="msg"><div class="who"><b>${esc(m.author_name)}</b> · ${esc((m.timestamp||'').replace('T',' ').slice(0,16))}</div>`
-         + `<div class="txt">${esc(m.content)}${tags}</div></div>`;
+         + `<div class="txt">${esc(m.content)}${tags}</div>${atts}</div>`;
   }).join('');
 }
 
-document.getElementById('q').addEventListener('keydown', async e => {
+function renderMembers(list) {
+  if (!list.length) { results.innerHTML = '<div class="muted">No members.</div>'; return; }
+  results.innerHTML = list.map(m =>
+    `<div class="msg"><div class="who"><b>${esc(m.display_name || m.name)}</b>` +
+    `${m.is_bot ? '<span class="tag bot">bot</span>' : ''}</div>` +
+    `<div class="txt muted">@${esc(m.name)} · joined ${esc((m.joined_at||'').slice(0,10))}</div></div>`
+  ).join('');
+}
+
+function renderRoles(list) {
+  if (!list.length) { results.innerHTML = '<div class="muted">No roles.</div>'; return; }
+  results.innerHTML = list.map(r => {
+    const col = hex(r.colour);
+    return `<div class="msg"><div class="who">` +
+      (col ? `<span class="swatch" style="background:${col}"></span>` : '') +
+      `<b>${esc(r.name)}</b></div><div class="txt muted">position ${r.position ?? ''}</div></div>`;
+  }).join('');
+}
+
+function renderAudit(list) {
+  if (!list.length) { results.innerHTML = '<div class="muted">No recorded changes yet.</div>'; return; }
+  results.innerHTML = list.map(e =>
+    `<div class="msg"><div class="who"><b>${esc(e.event)}</b> · ${esc((e.captured_at||'').replace('T',' ').slice(0,16))}</div>` +
+    `<div class="txt muted">${esc(e.target_name || e.target_id || '')}` +
+    `${e.actor_name ? ` by ${esc(e.actor_name)}` : ''}</div></div>`
+  ).join('');
+}
+
+async function loadTab(name) {
+  qInput.style.display = (name === 'messages') ? '' : 'none';
+  if (name === 'members') return renderMembers(await (await fetch('/api/members')).json());
+  if (name === 'roles')   return renderRoles(await (await fetch('/api/roles')).json());
+  if (name === 'audit')   return renderAudit(await (await fetch('/api/audit?limit=200')).json());
+  results.innerHTML = '<div class="muted">Pick a channel on the left, or search above.</div>';
+}
+
+document.querySelector('.tabs').addEventListener('click', e => {
+  const b = e.target.closest('.tab'); if (!b) return;
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  loadTab(b.dataset.tab);
+});
+
+qInput.addEventListener('keydown', async e => {
   if (e.key !== 'Enter') return;
-  const q = e.target.value.trim();
+  const q = qInput.value.trim();
   if (!q) return;
   const r = await fetch('/api/search?q=' + encodeURIComponent(q));
   render(await r.json());
@@ -101,8 +177,11 @@ document.getElementById('q').addEventListener('keydown', async e => {
 document.getElementById('chans').addEventListener('click', async e => {
   const li = e.target.closest('li[data-id]');
   if (!li) return;
-  document.querySelectorAll('li').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('#chans li').forEach(x => x.classList.remove('active'));
   li.classList.add('active');
+  document.querySelector('.tab.active').classList.remove('active');
+  document.querySelector('.tab[data-tab="messages"]').classList.add('active');
+  qInput.style.display = '';
   const r = await fetch('/api/channel/' + li.dataset.id + '?limit=200');
   render(await r.json());
 });

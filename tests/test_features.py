@@ -251,6 +251,43 @@ class TestDashboardNewEndpoints(unittest.TestCase):
             self.assertEqual(ev.status_code, 200)
             self.assertEqual(ev.get_json()[0]["event"], "channel.create")
 
+    def test_message_attachments_and_file_route(self):
+        import base64
+        from dashboard.app import create_app
+        with TemporaryDirectory() as d:
+            db = Database(Path(d) / "a.sqlite3")
+            db.upsert_guild(111, "T")
+            db.upsert_channel(1, 111, "gen", "text", 0)
+            db.insert_message({"id": 1, "guild_id": 111, "channel_id": 1,
+                               "author_id": 2, "author_name": "a", "content": "pic",
+                               "timestamp": "2026-01-01T00:00:00+00:00", "type": 0})
+            db.add_attachment({"id": 77, "message_id": 1, "channel_id": 1,
+                               "filename": "pic.png", "url": "https://x/y.png",
+                               "content_type": "image/png", "width": 1, "height": 1})
+            png = base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+                "AAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+            img = Path(d) / "pic.png"; img.write_bytes(png)
+            db.set_attachment_downloaded(77, str(img), "beef", len(png))
+            db.close()
+
+            c = create_app(Path(d) / "a.sqlite3").test_client()
+            msgs = c.get("/api/channel/1").get_json()
+            self.assertEqual(len(msgs[0]["attachments"]), 1)
+            self.assertTrue(msgs[0]["attachments"][0]["local_path"])
+
+            searched = c.get("/api/search?q=pic").get_json()
+            self.assertEqual(len(searched[0]["attachments"]), 1)
+
+            f = c.get("/file/77")
+            self.assertEqual(f.status_code, 200)
+            self.assertEqual(f.mimetype, "image/png")
+            self.assertEqual(f.data, png)
+            f.close()  # send_file wraps an open file; release it like a server would
+
+            # an attachment with no local file 404s
+            self.assertEqual(c.get("/file/999").status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()
