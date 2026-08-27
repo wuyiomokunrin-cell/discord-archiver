@@ -65,7 +65,10 @@
   .muted { color:var(--dim); font-size:13px; }
   .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; }
   .rhead { margin:12px 0 2px; text-transform:uppercase; font-size:11px; letter-spacing:.05em;
-           color:var(--dim); }
+           color:var(--dim); cursor:pointer; }
+  .rhead:hover { color:var(--txt); }
+  .rhead .arrow { display:inline-block; margin-right:4px; transition:transform .1s; }
+  .rhead.collapsed .arrow { transform:rotate(-90deg); }
 </style>
 </head>
 <body>
@@ -189,7 +192,17 @@ function render(msgs) {
   }).join('');
 }
 
-// ---- members grouped by role hierarchy ----
+// ---- members grouped by role hierarchy, collapsible per role ----
+const collapsedRoles = new Set();
+function applyRoleCollapse() {
+  document.querySelectorAll('#results [data-role]').forEach(el => {
+    el.style.display = collapsedRoles.has(el.dataset.role) ? 'none' : '';
+  });
+  document.querySelectorAll('#results .rhead').forEach(h => {
+    h.classList.toggle('collapsed', collapsedRoles.has(h.dataset.rolegroup));
+  });
+}
+
 function renderMembers(list) {
   if (!list.length) { results.innerHTML = '<div class="muted">No members.</div>'; return; }
   const byRole = {};
@@ -199,16 +212,18 @@ function renderMembers(list) {
   });
   const keys = Object.keys(byRole).sort((a, b) => (byRole[b].pos ?? -1) - (byRole[a].pos ?? -1));
   let html = '';
-  for (const k of keys) {
+  keys.forEach((k, i) => {
     const g = byRole[k]; const col = hex(g.colour);
-    html += `<div class="rhead">${col ? `<span class="swatch" style="background:${col}"></span>` : ''}` +
+    html += `<div class="rhead" data-rolegroup="${i}"><span class="arrow">▾</span>` +
+            (col ? `<span class="swatch" style="background:${col}"></span>` : '') +
             `${esc(k)} — ${g.items.length}</div>`;
     html += g.items.map(m =>
-      `<div class="msg"><div class="who"><b>${esc(m.display_name || m.name)}</b>` +
+      `<div class="msg" data-role="${i}"><div class="who"><b>${esc(m.display_name || m.name)}</b>` +
       `${m.is_bot ? '<span class="tag bot">bot</span>' : ''}</div>` +
       `<div class="txt muted">@${esc(m.name)}</div></div>`).join('');
-  }
+  });
   results.innerHTML = html;
+  applyRoleCollapse();
 }
 
 function renderRoles(list) {
@@ -242,6 +257,14 @@ document.querySelector('.tabs').addEventListener('click', e => {
   document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
   b.classList.add('active');
   loadTab(b.dataset.tab);
+});
+
+// Click a role header in the Members tab to collapse/expand that role.
+results.addEventListener('click', e => {
+  const h = e.target.closest('.rhead'); if (!h) return;
+  const g = h.dataset.rolegroup;
+  collapsedRoles.has(g) ? collapsedRoles.delete(g) : collapsedRoles.add(g);
+  applyRoleCollapse();
 });
 
 qInput.addEventListener('keydown', async e => {

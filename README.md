@@ -7,6 +7,21 @@ serves a local dashboard for browsing and searching.
 Runs as a normal bot on your own machine — so it uses your IP and only runs when
 you start it. No self-botting, no user-account automation.
 
+## Contents
+
+**Start here** — [The one rule](#the-one-rule) · [Setup](#setup) · [Commands](#commands)
+
+**What it captures** — [How it works](#how-it-works) · [Limitations](#limitations) ·
+[Live features](#live-features-while-listening)
+
+**Ways to run it** — [Autostart / no terminal](#run-it-without-a-terminal-autostart) ·
+[Windows (dual boot)](#running-on-windows-dual-boot) · [Docker](#running-in-docker)
+
+**Using the data** — [Slash commands](#slash-commands-control-from-chat) ·
+[Dashboard & exports](#commands) · [Privacy](#privacy)
+
+**Project** — [Releases](#releases) · [Tests](#tests)
+
 ## The one rule
 
 **Only run this against a server you own or administer.**
