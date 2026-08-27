@@ -36,7 +36,9 @@ def setup_logging(verbose: bool) -> None:
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
-    logging.getLogger("discord").setLevel(logging.WARNING)
+    # discord.py warns about missing PyNaCl/davey on every start. This project
+    # never touches voice, so those warnings are pure noise to a first-time user.
+    logging.getLogger("discord").setLevel(logging.ERROR)
 
 
 # --------------------------------------------------------------- connected
@@ -51,23 +53,74 @@ async def _resolve_guild(client: discord.Client, guild_id: int) -> discord.Guild
     return guild
 
 
-async def run_command(cfg, body) -> None:
-    """Shared connect/disconnect harness for the one-shot subcommands."""
+def _die(headline: str, what_to_do: str) -> None:
+    """Print a readable error instead of a traceback for known failure modes."""
+    print(f"\nerror: {headline}", file=sys.stderr)
+    print(f"  -> {what_to_do}\n", file=sys.stderr)
+
+
+async def run_command(cfg, body) -> int:
+    """Shared connect/disconnect harness for the one-shot subcommands.
+
+    Translates the discord.py exceptions a first-time user is most likely to hit
+    into plain instructions. An unhandled LoginFailure otherwise prints a
+    traceback plus an aiohttp "Unclosed connector" warning, which reads like a
+    crash even though the fix is a typo in .env.
+    """
     db = Database(cfg.db_path)
     client = make_client(db, guild_id=cfg.guild_id,
                          capture_edits=cfg.capture_edits,
                          capture_deletes=cfg.capture_deletes)
+    runner_task = None
 
-    async def runner():
-        await client.wait_until_ready()
+    try:
+        async def runner():
+            await client.wait_until_ready()
+            try:
+                await body(client, db)
+            finally:
+                await client.close()
+
+        runner_task = asyncio.create_task(runner())
+        await client.start(cfg.bot_token)
+        await runner_task
+        return 0
+
+    except discord.LoginFailure:
+        _die("Discord rejected the bot token.",
+             "Open .env and check DISCORD_BOT_TOKEN. It must be the exact string "
+             "from the Developer Portal (Bot tab -> Reset Token), with no spaces, "
+             "quotes, or line breaks. If you reset the token, the old one is dead.")
+        return 3
+
+    except discord.PrivilegedIntentsRequired:
+        _die("Discord refused the connection: a privileged intent is switched off.",
+             "Developer Portal -> your app -> Bot -> Privileged Gateway Intents. "
+             "Enable MESSAGE CONTENT INTENT and SERVER MEMBERS INTENT, click Save, "
+             "then run this again.")
+        return 4
+
+    except discord.GatewayNotFound:
+        _die("Could not reach Discord's gateway.",
+             "Discord may be having an outage. Wait a minute and try again.")
+        return 5
+
+    except discord.HTTPException as exc:
+        _die(f"Discord returned an HTTP error: {exc}",
+             "Check your internet connection, and that the bot is still a member "
+             "of the server.")
+        return 6
+
+    finally:
+        if runner_task is not None and not runner_task.done():
+            runner_task.cancel()
+        # Closing the client releases the aiohttp connector; skipping this is
+        # what produces the misleading "Unclosed connector" warning.
         try:
-            await body(client, db)
-        finally:
             await client.close()
-
-    task = asyncio.create_task(runner())
-    await client.start(cfg.bot_token)
-    await task
+        except Exception:
+            pass
+        db.close()
 
 
 async def _backfill_body(client: discord.Client, db: Database, cfg) -> None:
@@ -247,9 +300,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.command == "backfill":
-        asyncio.run(run_command(cfg, lambda c, db: _backfill_body(c, db, cfg)))
+        return asyncio.run(run_command(cfg, lambda c, db: _backfill_body(c, db, cfg)))
     elif args.command == "listen":
-        asyncio.run(run_command(cfg, lambda c, db: _listen_body(c, db, cfg)))
+        return asyncio.run(run_command(cfg, lambda c, db: _listen_body(c, db, cfg)))
     elif args.command == "export":
         cmd_export(cfg, args)
     elif args.command == "info":
