@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Archive dashboard</title>
+<style>
+  :root { --bg:#1e1f22; --panel:#2b2d31; --line:#1a1b1e; --txt:#dbdee1; --dim:#949ba4; --acc:#00a8fc; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt);
+         font-family:system-ui,-apple-system,Segoe UI,sans-serif; }
+  header { padding:14px 24px; background:var(--panel); border-bottom:1px solid var(--line);
+           display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; }
+  h1 { margin:0; font-size:17px; }
+  .btn { background:var(--acc); color:#fff; border:0; padding:7px 14px; border-radius:4px;
+         cursor:pointer; font-size:13px; text-decoration:none; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; padding:20px 24px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:14px; }
+  .card b { display:block; font-size:24px; }
+  .card span { color:var(--dim); font-size:12px; }
+  main { display:grid; grid-template-columns:280px 1fr; gap:20px; padding:0 24px 24px; }
+  @media (max-width:800px){ main{grid-template-columns:1fr;} }
+  .side, .content { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:14px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--dim); margin:0 0 10px; }
+  ul { list-style:none; margin:0; padding:0; }
+  li { padding:6px 8px; border-radius:4px; cursor:pointer; font-size:13px;
+       display:flex; justify-content:space-between; gap:8px; }
+  li:hover { background:#313338; }
+  li.active { background:#3c4147; }
+  li .n { color:var(--dim); font-variant-numeric:tabular-nums; }
+  input { width:100%; padding:8px; background:var(--bg); color:var(--txt);
+          border:1px solid var(--line); border-radius:4px; margin-bottom:10px; font-size:13px; }
+  .msg { border-bottom:1px solid var(--line); padding:8px 0; }
+  .msg:last-child { border-bottom:0; }
+  .who { font-size:12px; color:var(--dim); }
+  .who b { color:var(--txt); }
+  .txt { white-space:pre-wrap; word-break:break-word; font-size:14px; margin-top:2px; }
+  .tag { font-size:10px; padding:1px 5px; border-radius:3px; margin-left:6px; }
+  .del { background:#5c1f1f; color:#f5b5b5; }
+  .edt { background:#4a3f1f; color:#f0dfa5; }
+  .muted { color:var(--dim); font-size:13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Discord archive &mdash; {% if guilds %}{{ guilds[0].name }}{% else %}no data yet{% endif %}</h1>
+  <div>
+    <a class="btn" href="/export/json">Export JSON</a>
+    <a class="btn" href="/export/csv">Export CSV</a>
+  </div>
+</header>
+
+<div class="grid">
+  <div class="card"><b>{{ messages }}</b><span>messages</span></div>
+  <div class="card"><b>{{ deleted }}</b><span>deleted</span></div>
+  <div class="card"><b>{{ channels|length }}</b><span>channels</span></div>
+  <div class="card"><b>{{ attachments_done }}/{{ attachments }}</b><span>attachments saved</span></div>
+</div>
+
+<main>
+  <div class="side">
+    <h2>Channels</h2>
+    <ul id="chans">
+      {% for c in channels %}
+        <li data-id="{{ c.id }}"><span>#{{ c.name or c.id }}</span><span class="n">{{ c.n }}</span></li>
+      {% else %}
+        <li class="muted">none</li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <div class="content">
+    <h2>Search</h2>
+    <input id="q" placeholder="search message text, press Enter">
+    <div id="results" class="muted">Pick a channel on the left, or search above.</div>
+  </div>
+</main>
+
+<script>
+const results = document.getElementById('results');
+const esc = s => (s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function render(msgs) {
+  if (!msgs.length) { results.innerHTML = '<div class="muted">No matches.</div>'; return; }
+  results.innerHTML = msgs.map(m => {
+    const tags = (m.deleted ? '<span class="tag del">deleted</span>' : '')
+               + (m.edited_timestamp ? '<span class="tag edt">edited</span>' : '');
+    return `<div class="msg"><div class="who"><b>${esc(m.author_name)}</b> · ${esc((m.timestamp||'').replace('T',' ').slice(0,16))}</div>`
+         + `<div class="txt">${esc(m.content)}${tags}</div></div>`;
+  }).join('');
+}
+
+document.getElementById('q').addEventListener('keydown', async e => {
+  if (e.key !== 'Enter') return;
+  const q = e.target.value.trim();
+  if (!q) return;
+  const r = await fetch('/api/search?q=' + encodeURIComponent(q));
+  render(await r.json());
+});
+
+document.getElementById('chans').addEventListener('click', async e => {
+  const li = e.target.closest('li[data-id]');
+  if (!li) return;
+  document.querySelectorAll('li').forEach(x => x.classList.remove('active'));
+  li.classList.add('active');
+  const r = await fetch('/api/channel/' + li.dataset.id + '?limit=200');
+  render(await r.json());
+});
+</script>
+</body>
+</html>

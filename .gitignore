@@ -1,0 +1,22 @@
+# Credentials - never commit these
+.env
+*.token
+
+# Archive data: other people's messages and files live here
+data/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db
