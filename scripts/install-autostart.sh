@@ -24,7 +24,9 @@ After=network-online.target
 
 [Service]
 WorkingDirectory=$DIR
-ExecStart=$DIR/scripts/run.sh
+# Launch through bash so the service never depends on the exec bit surviving
+# checkout/editor quirks (a lost +x bit shows up as systemd 203/EXEC).
+ExecStart=/bin/bash $DIR/scripts/run.sh
 Restart=on-failure
 RestartSec=10
 
