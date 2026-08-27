@@ -21,6 +21,7 @@
   main { display:grid; grid-template-columns:280px 1fr; gap:20px; padding:0 24px 24px; }
   @media (max-width:800px){ main{grid-template-columns:1fr;} }
   .side, .content { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:14px; }
+  .side { max-height:80vh; overflow-y:auto; }
   h2 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--dim); margin:0 0 10px; }
   ul { list-style:none; margin:0; padding:0; }
   li { padding:6px 8px; border-radius:4px; cursor:pointer; font-size:13px;
@@ -28,9 +29,11 @@
   li:hover { background:#313338; }
   li.active { background:#3c4147; }
   li .n { color:var(--dim); font-variant-numeric:tabular-nums; }
-  li.cat { cursor:default; text-transform:uppercase; letter-spacing:.06em; font-size:11px;
-           color:var(--dim); padding:12px 8px 4px; }
-  li.cat:hover { background:none; }
+  li.cat { cursor:pointer; text-transform:uppercase; letter-spacing:.06em; font-size:11px;
+           color:var(--dim); padding:12px 8px 4px; justify-content:flex-start; }
+  li.cat:hover { background:none; color:var(--txt); }
+  li.cat .arrow { display:inline-block; margin-right:4px; transition:transform .1s; }
+  li.cat.collapsed .arrow { transform:rotate(-90deg); }
   li.thread { padding-left:26px; color:var(--dim); font-size:12px; }
   input { width:100%; padding:8px; background:var(--bg); color:var(--txt);
           border:1px solid var(--line); border-radius:4px; margin-bottom:10px; font-size:13px; }
@@ -48,13 +51,21 @@
               border:1px solid var(--line); }
   .attlink { color:var(--acc); font-size:13px; text-decoration:none; }
   .attlink:hover { text-decoration:underline; }
+  .embed { background:#232428; border-left:4px solid var(--acc); border-radius:4px;
+           padding:8px 12px; margin-top:8px; max-width:540px; }
+  .embed .et { font-weight:600; font-size:14px; }
+  .embed .ed { font-size:13px; color:var(--txt); white-space:pre-wrap; margin-top:4px; }
+  .embed .ef { font-size:12px; margin-top:6px; }
+  .embed .ef b { display:block; }
+  .embed .ef span { color:var(--dim); white-space:pre-wrap; }
   .tag { font-size:10px; padding:1px 5px; border-radius:3px; margin-left:6px; }
   .del { background:#5c1f1f; color:#f5b5b5; }
   .edt { background:#4a3f1f; color:#f0dfa5; }
   .bot { background:#1f3c5c; color:#a5cdf5; }
   .muted { color:var(--dim); font-size:13px; }
-  .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px;
-            vertical-align:baseline; }
+  .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; }
+  .rhead { margin:12px 0 2px; text-transform:uppercase; font-size:11px; letter-spacing:.05em;
+           color:var(--dim); }
 </style>
 </head>
 <body>
@@ -97,41 +108,52 @@ const qInput = document.getElementById('q');
 const esc = s => (s ?? '').replace(/[&<>\"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
 const hex = c => (!c ? null : '#' + (c >>> 0 & 0xffffff).toString(16).padStart(6, '0'));
 const THREAD = [10, 11, 12];
+const collapsedCats = new Set();
 
-// Discord-style hierarchy: categories as headers, channels beneath, threads
-// nested under their parent channel.
+// ---- sidebar: Discord-style hierarchy with collapsible categories ----
 function renderChannels(rows) {
   const el = document.getElementById('chans');
-  const cats = rows.filter(r => r.type === 4)
-                   .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+  const cats = rows.filter(r => r.type === 4).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
   const chans = rows.filter(r => r.type !== 4 && !THREAD.includes(r.type));
   const threads = rows.filter(r => THREAD.includes(r.type));
+  const catOf = {}; chans.forEach(c => catOf[c.id] = c.category_id || '');
   const thrBy = {}; threads.forEach(t => (thrBy[t.parent_id] = thrBy[t.parent_id] || []).push(t));
   const byCat = {}; chans.forEach(c => (byCat[c.category_id || ''] = byCat[c.category_id || ''] || []).push(c));
   Object.values(byCat).forEach(a => a.sort((x, y) => (x.position ?? 0) - (y.position ?? 0)));
 
-  const chanHtml = c => {
+  const chanHtml = (c, cat) => {
     const icon = c.type === 15 ? '📁' : (c.type === 2 ? '🔊' : '#');
-    let h = `<li data-id="${c.id}"><span>${icon} ${esc(c.name || c.id)}</span><span class="n">${c.n}</span></li>`;
+    let h = `<li data-id="${c.id}" data-cat="${cat}"><span>${icon} ${esc(c.name || c.id)}</span><span class="n">${c.n}</span></li>`;
     for (const t of (thrBy[c.id] || []))
-      h += `<li class="thread" data-id="${t.id}"><span>↳ ${esc(t.name)}</span><span class="n">${t.n}</span></li>`;
+      h += `<li class="thread" data-id="${t.id}" data-cat="${cat}"><span>↳ ${esc(t.name)}</span><span class="n">${t.n}</span></li>`;
     return h;
   };
 
   let html = '';
   for (const cat of cats) {
-    html += `<li class="cat">${esc(cat.name)}</li>`;
-    for (const c of (byCat[cat.id] || [])) html += chanHtml(c);
+    html += `<li class="cat" data-catgroup="${cat.id}"><span class="arrow">▾</span>${esc(cat.name)}</li>`;
+    for (const c of (byCat[cat.id] || [])) html += chanHtml(c, cat.id);
   }
   if ((byCat[''] || []).length) {
-    html += `<li class="cat">Channels</li>`;
-    for (const c of byCat['']) html += chanHtml(c);
+    html += `<li class="cat" data-catgroup=""><span class="arrow">▾</span>Channels</li>`;
+    for (const c of byCat['']) html += chanHtml(c, '');
   }
   el.innerHTML = html || '<li class="muted">none</li>';
+  applyCollapse();
+}
+
+function applyCollapse() {
+  document.querySelectorAll('#chans li[data-cat]').forEach(li => {
+    li.style.display = collapsedCats.has(li.dataset.cat) ? 'none' : '';
+  });
+  document.querySelectorAll('#chans li.cat').forEach(li => {
+    li.classList.toggle('collapsed', collapsedCats.has(li.dataset.catgroup));
+  });
 }
 
 fetch('/api/channels').then(r => r.json()).then(renderChannels);
 
+// ---- messages ----
 function attHtml(a) {
   const isImg = (a.content_type || '').startsWith('image/');
   const local = a.local_path ? '/file/' + a.id : null;
@@ -144,6 +166,14 @@ function attHtml(a) {
          `${isImg ? '🖼' : '📎'} ${esc(a.filename || 'attachment')}</a>`;
 }
 
+function embedHtml(e) {
+  const fields = (e.fields || []).map(f =>
+    `<div class="ef"><b>${esc(f.name)}</b><span>${esc(f.value)}</span></div>`).join('');
+  return `<div class="embed" style="border-left-color:${hex(e.color) || 'var(--acc)'}">` +
+    (e.title ? `<div class="et">${esc(e.title)}</div>` : '') +
+    (e.description ? `<div class="ed">${esc(e.description)}</div>` : '') + fields + `</div>`;
+}
+
 function render(msgs) {
   if (!msgs.length) { results.innerHTML = '<div class="muted">No matches.</div>'; return; }
   results.innerHTML = msgs.map(m => {
@@ -151,18 +181,34 @@ function render(msgs) {
                + (m.edited_timestamp ? '<span class="tag edt">edited</span>' : '');
     const atts = (m.attachments && m.attachments.length)
       ? `<div class="atts">${m.attachments.map(attHtml).join('')}</div>` : '';
+    let emb = '';
+    if (m.embeds_json) { try { emb = JSON.parse(m.embeds_json).map(embedHtml).join(''); } catch (e) {} }
     return `<div class="msg"><div class="who"><b>${esc(m.author_name)}</b> · ${esc((m.timestamp||'').replace('T',' ').slice(0,16))}</div>`
-         + `<div class="txt">${esc(m.content)}${tags}</div>${atts}</div>`;
+         + (m.content ? `<div class="txt">${esc(m.content)}${tags}</div>` : (tags ? `<div class="txt">${tags}</div>` : ''))
+         + emb + atts + `</div>`;
   }).join('');
 }
 
+// ---- members grouped by role hierarchy ----
 function renderMembers(list) {
   if (!list.length) { results.innerHTML = '<div class="muted">No members.</div>'; return; }
-  results.innerHTML = list.map(m =>
-    `<div class="msg"><div class="who"><b>${esc(m.display_name || m.name)}</b>` +
-    `${m.is_bot ? '<span class="tag bot">bot</span>' : ''}</div>` +
-    `<div class="txt muted">@${esc(m.name)} · joined ${esc((m.joined_at||'').slice(0,10))}</div></div>`
-  ).join('');
+  const byRole = {};
+  list.forEach(m => {
+    const key = m.top_role || 'Members';
+    (byRole[key] = byRole[key] || { pos: m.top_pos, colour: m.top_colour, items: [] }).items.push(m);
+  });
+  const keys = Object.keys(byRole).sort((a, b) => (byRole[b].pos ?? -1) - (byRole[a].pos ?? -1));
+  let html = '';
+  for (const k of keys) {
+    const g = byRole[k]; const col = hex(g.colour);
+    html += `<div class="rhead">${col ? `<span class="swatch" style="background:${col}"></span>` : ''}` +
+            `${esc(k)} — ${g.items.length}</div>`;
+    html += g.items.map(m =>
+      `<div class="msg"><div class="who"><b>${esc(m.display_name || m.name)}</b>` +
+      `${m.is_bot ? '<span class="tag bot">bot</span>' : ''}</div>` +
+      `<div class="txt muted">@${esc(m.name)}</div></div>`).join('');
+  }
+  results.innerHTML = html;
 }
 
 function renderRoles(list) {
@@ -180,8 +226,7 @@ function renderAudit(list) {
   results.innerHTML = list.map(e =>
     `<div class="msg"><div class="who"><b>${esc(e.event)}</b> · ${esc((e.captured_at||'').replace('T',' ').slice(0,16))}</div>` +
     `<div class="txt muted">${esc(e.target_name || e.target_id || '')}` +
-    `${e.actor_name ? ` by ${esc(e.actor_name)}` : ''}</div></div>`
-  ).join('');
+    `${e.actor_name ? ` by ${esc(e.actor_name)}` : ''}</div></div>`).join('');
 }
 
 async function loadTab(name) {
@@ -208,6 +253,13 @@ qInput.addEventListener('keydown', async e => {
 });
 
 document.getElementById('chans').addEventListener('click', async e => {
+  const cat = e.target.closest('li.cat');
+  if (cat) {
+    const g = cat.dataset.catgroup;
+    collapsedCats.has(g) ? collapsedCats.delete(g) : collapsedCats.add(g);
+    applyCollapse();
+    return;
+  }
   const li = e.target.closest('li[data-id]');
   if (!li) return;
   document.querySelectorAll('#chans li').forEach(x => x.classList.remove('active'));

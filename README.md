@@ -267,8 +267,10 @@ local database the dashboard uses, so other admins see the same data in chat -
 the dashboard web page itself still lives on your machine only. Commands are
 synced to the guild automatically when the bot connects.
 
-The dashboard sidebar is organised like Discord: categories as headers, channels
-beneath them, and threads nested under their parent channel.
+The dashboard sidebar is organised like Discord: categories as headers (click to
+collapse), channels beneath them, and threads nested under their parent channel.
+Messages render their embeds and attachments, and the Members tab groups people
+by their highest role in hierarchy order, like Discord's member list.
 
 ## Releases
 

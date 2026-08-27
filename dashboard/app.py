@@ -101,8 +101,18 @@ def create_app(db_path: str | Path) -> Flask:
 
     @app.route("/api/members")
     def api_members():
+        # Annotate each member with their highest-position role so the UI can
+        # group them Discord-style (role headers in hierarchy order).
         with conn() as c:
-            rows = c.execute("SELECT * FROM members ORDER BY name").fetchall()
+            rows = c.execute(
+                "SELECT m.*, "
+                "(SELECT r.name FROM member_roles mr JOIN roles r ON r.id=mr.role_id "
+                " WHERE mr.member_id=m.id ORDER BY r.position DESC LIMIT 1) AS top_role, "
+                "(SELECT r.position FROM member_roles mr JOIN roles r ON r.id=mr.role_id "
+                " WHERE mr.member_id=m.id ORDER BY r.position DESC LIMIT 1) AS top_pos, "
+                "(SELECT r.colour FROM member_roles mr JOIN roles r ON r.id=mr.role_id "
+                " WHERE mr.member_id=m.id ORDER BY r.position DESC LIMIT 1) AS top_colour "
+                "FROM members m ORDER BY top_pos DESC, m.name").fetchall()
         return jsonify([dict(r) for r in rows])
 
     @app.route("/api/roles")
