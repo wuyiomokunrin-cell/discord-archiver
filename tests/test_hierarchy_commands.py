@@ -63,6 +63,17 @@ class TestSlashCommands(unittest.TestCase):
                 names, {"help", "stats", "channels", "members", "roles",
                         "audit", "search"})
 
+    def test_group_can_bind_to_guild_for_sync(self):
+        # A guild sync only uploads guild-bound commands; the client must expose
+        # the group so sync() can bind it, otherwise the sync is empty.
+        with TemporaryDirectory() as d:
+            client = self._client(Database(Path(d) / "a.sqlite3"))
+            self.assertEqual(client.archive_group.name, "archive")
+            g = discord.Object(id=999)
+            client.tree.add_command(client.archive_group, guild=g, override=True)
+            bound = client.tree._get_all_commands(guild=g)
+            self.assertEqual([c.name for c in bound], ["archive"])
+
     def test_is_mod_gate(self):
         admin = SimpleNamespace(guild_permissions=discord.Permissions(
             administrator=True))

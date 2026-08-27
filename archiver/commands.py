@@ -207,6 +207,10 @@ def setup_commands(client: discord.Client) -> None:
         await interaction.response.send_message(embed=e)
 
     tree.add_command(group)
+    # Keep a handle so sync() can bind this group to the target guild. A guild
+    # sync only uploads commands registered for that guild; a globally-added
+    # command would produce a successful-but-empty sync and never appear.
+    client.archive_group = group
 
 
 async def sync(client: discord.Client) -> None:
@@ -218,6 +222,9 @@ async def sync(client: discord.Client) -> None:
         log.warning("no guild available to sync slash commands")
         return
     try:
+        grp = getattr(client, "archive_group", None)
+        if grp is not None:
+            client.tree.add_command(grp, guild=guild, override=True)
         await client.tree.sync(guild=guild)
         log.info("synced /archive slash commands for %s", guild.name)
     except Exception:
