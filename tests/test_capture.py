@@ -289,3 +289,73 @@ class TestSchemaDrivesFormats(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCaptureColdStart(unittest.TestCase):
+    """Regression: capture against a database with nothing pre-created.
+
+    The original bug was that capture_message created channel and author rows
+    but never the guild row, so the very first live message raised
+    sqlite3.IntegrityError: FOREIGN KEY constraint failed. The rest of this
+    file could not catch it, because setUp() pre-created the guild.
+    """
+
+    def setUp(self):
+        # Deliberately empty. No upsert_guild, no upsert_channel.
+        self.db = Database(":memory:")
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_capture_succeeds_on_a_completely_empty_database(self):
+        """The exact production failure: first message, nothing catalogued."""
+        self.assertTrue(capture_message(self.db, make_message(1000)))
+        self.assertEqual(self.db.stats()["messages"], 1)
+
+    def test_guild_row_is_created_from_the_message(self):
+        capture_message(self.db, make_message(1000))
+        g = self.db.conn.execute("SELECT * FROM guilds").fetchone()
+        self.assertIsNotNone(g, "guild row must be created on demand")
+        self.assertEqual(g["id"], "111")
+        self.assertEqual(g["name"], "Test Server")
+
+    def test_channel_and_member_are_parented_to_that_guild(self):
+        capture_message(self.db, make_message(1000))
+        self.assertEqual(
+            self.db.conn.execute("SELECT guild_id FROM channels").fetchone()["guild_id"], "111")
+        self.assertEqual(
+            self.db.conn.execute("SELECT guild_id FROM members").fetchone()["guild_id"], "111")
+
+    def test_many_messages_do_not_re_upsert_the_guild(self):
+        """The cache must hold, otherwise a busy server costs a write per message."""
+        capture_message(self.db, make_message(1000))
+        self.db.conn.execute("UPDATE guilds SET name = 'renamed by hand'")
+        self.db.conn.commit()
+
+        capture_message(self.db, make_message(1001))
+        name = self.db.conn.execute("SELECT name FROM guilds").fetchone()["name"]
+        self.assertEqual(name, "renamed by hand",
+                         "second message must not overwrite the guild row")
+
+    def test_dm_message_is_skipped_rather_than_crashing(self):
+        """A DM has no guild, and every table hangs off one, so skip it cleanly."""
+        from .stubs import FakeChannel
+        ch = FakeChannel(id=999, guild=None, name="dm")
+        msg = make_message(2000, channel=ch)
+        self.assertFalse(capture_message(self.db, msg))
+        self.assertEqual(self.db.stats()["messages"], 0)
+
+    def test_live_capture_does_not_wipe_catalogued_metadata(self):
+        """backfill.catalog_guild() writes owner_id/created_at and a member
+        count. A live message arriving afterwards carries a partial view of the
+        guild and must not blank any of that out."""
+        self.db.upsert_guild(111, "Test Server", member_count=2,
+                             meta={"owner_id": "333", "created_at": "2025-12-31"})
+
+        capture_message(self.db, make_message(1000))
+
+        g = self.db.conn.execute("SELECT * FROM guilds WHERE id='111'").fetchone()
+        self.assertEqual(g["member_count"], 2, "member_count was blanked")
+        self.assertIsNotNone(g["meta_json"], "meta_json was blanked")
+        self.assertIn("owner_id", g["meta_json"])
+        self.assertIn("created_at", g["meta_json"])

@@ -45,11 +45,52 @@ def message_to_row(msg) -> dict[str, Any]:
     }
 
 
-def ensure_channel(db: Database, msg) -> None:
+def ensure_guild(db: Database, msg) -> str | None:
+    """Make sure the guild row exists. Returns the guild id, or None for DMs.
+
+    This must run before ensure_channel and ensure_author: both tables carry a
+    foreign key to guilds, so inserting either without the parent row raises
+    IntegrityError. That happens in practice because the gateway starts
+    delivering MESSAGE_CREATE the moment the client connects, well before
+    backfill.catalog_guild() has had a chance to run.
+
+    Results are cached per-Database so a busy server does not cost a write per
+    message.
+    """
+    guild = getattr(msg, "guild", None)
+    guild_id = getattr(guild, "id", None)
+    if guild_id is None:
+        return None
+
+    key = str(guild_id)
+    seen = getattr(db, "_seen_guilds", None)
+    if seen is None:
+        seen = db._seen_guilds = set()
+    if key in seen:
+        return key
+
+    db.upsert_guild(key, getattr(guild, "name", None) or key,
+                    member_count=getattr(guild, "member_count", None))
+    seen.add(key)
+    return key
+
+
+def ensure_channel(db: Database, msg) -> bool:
+    """Catalogue the channel. Returns False if it has no guild (DM)."""
     ch = msg.channel
-    guild_id = getattr(getattr(ch, "guild", None), "id", None) or 0
+    guild_id = ensure_guild(db, msg)
+    if guild_id is None:
+        return False
+
+    key = str(ch.id)
+    seen = getattr(db, "_seen_channels", None)
+    if seen is None:
+        seen = db._seen_channels = set()
+    if key in seen:
+        return True
+
     db.upsert_channel(
-        channel_id=ch.id,
+        channel_id=key,
         guild_id=guild_id,
         name=getattr(ch, "name", None),
         type_=getattr(getattr(ch, "type", None), "value", None),
@@ -58,17 +99,22 @@ def ensure_channel(db: Database, msg) -> None:
         topic=getattr(ch, "topic", None),
         nsfw=bool(getattr(ch, "nsfw", False)),
     )
+    seen.add(key)
+    return True
 
 
 def ensure_author(db: Database, msg) -> None:
     author = msg.author
     if author is None or getattr(author, "id", None) is None:
         return
+    guild_id = ensure_guild(db, msg)
+    if guild_id is None:
+        return  # DM: no guild row to hang the member off
     guild = getattr(msg, "guild", None)
     role_ids = [r.id for r in getattr(author, "roles", [])] if guild else []
     db.upsert_member(
         member_id=author.id,
-        guild_id=getattr(guild, "id", 0),
+        guild_id=guild_id,
         name=getattr(author, "name", None),
         display_name=getattr(author, "display_name", None),
         is_bot=bool(getattr(author, "bot", False)),
@@ -79,12 +125,16 @@ def ensure_author(db: Database, msg) -> None:
 
 
 def capture_message(db: Database, msg) -> bool:
-    """Persist a message. Returns True if it was new.
+    """Persist a message. Returns True if it was new, False if already stored
+    or not storable.
 
-    Ensures the parent channel and author exist first, so foreign keys hold
-    even when a message arrives before its channel has been catalogued.
+    Creates the guild, channel, and author rows on demand, in that order, so
+    foreign keys hold even when a message arrives before anything has been
+    catalogued. Returns False for DMs: every table in the schema hangs off a
+    guild, so there is nowhere to put them.
     """
-    ensure_channel(db, msg)
+    if not ensure_channel(db, msg):
+        return False
     ensure_author(db, msg)
 
     row = message_to_row(msg)

@@ -131,27 +131,32 @@ def create_app(db_path: str | Path) -> Flask:
     @app.route("/export/<fmt>")
     def export(fmt: str):
         """Download an export built on demand from the live database."""
+        if fmt not in ("json", "csv"):
+            abort(404)
+
         from archiver import export as ex
-
-        with conn() as c:
-            row = c.execute("SELECT id, name FROM guilds LIMIT 1").fetchone()
-        guild_id = row["id"] if row else None
-        name = (row["name"] if row else "archive").replace(" ", "-").lower()
-        out_dir = Path(app.config["DB_PATH"]).parent / "exports" / "dashboard"
-
-        if fmt == "json":
-            p = ex.export_json(c2(app), out_dir / f"{name}.json", guild_id=guild_id)
-            return Response(p.read_text(encoding="utf-8"), mimetype="application/json",
-                            headers={"Content-Disposition": f'attachment; filename="{p.name}"'})
-        if fmt == "csv":
-            p = ex.export_csv(c2(app), out_dir / f"{name}.csv", guild_id=guild_id)
-            return Response(p.read_text(encoding="utf-8"), mimetype="text/csv",
-                            headers={"Content-Disposition": f'attachment; filename="{p.name}"'})
-        abort(404)
-
-    def c2(app):  # small shim so the exporter gets a Database-like handle
         from archiver.db import Database
-        return Database(app.config["DB_PATH"])
+
+        db = Database(app.config["DB_PATH"])
+        try:
+            row = db.conn.execute("SELECT id, name FROM guilds LIMIT 1").fetchone()
+            guild_id = row["id"] if row else None
+            name = ((row["name"] if row else "archive") or "archive")
+            name = name.replace(" ", "-").lower()
+            out_dir = Path(app.config["DB_PATH"]).parent / "exports" / "dashboard"
+
+            if fmt == "json":
+                p = ex.export_json(db, out_dir / f"{name}.json", guild_id=guild_id)
+                return Response(p.read_text(encoding="utf-8"),
+                                mimetype="application/json",
+                                headers={"Content-Disposition":
+                                         f'attachment; filename="{p.name}"'})
+            p = ex.export_csv(db, out_dir / f"{name}.csv", guild_id=guild_id)
+            return Response(p.read_text(encoding="utf-8"), mimetype="text/csv",
+                            headers={"Content-Disposition":
+                                     f'attachment; filename="{p.name}"'})
+        finally:
+            db.close()
 
     return app
 

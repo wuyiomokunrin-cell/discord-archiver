@@ -201,15 +201,22 @@ class Database:
 
     def upsert_guild(self, guild_id: str, name: str, member_count: int | None = None,
                      meta: Mapping[str, Any] | None = None) -> None:
+        """Create or refresh a guild row.
+
+        COALESCE on the conflicting columns: callers pass partial views of a
+        guild. capture.ensure_guild() sees only what a gateway event carries, so
+        without this it would blank out the member_count and meta_json that
+        backfill.catalog_guild() had already filled in.
+        """
         now = utcnow()
         self.conn.execute(
             """INSERT INTO guilds(id, name, member_count, captured_at, updated_at, meta_json)
                VALUES(?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
-                 name = excluded.name,
-                 member_count = excluded.member_count,
+                 name = COALESCE(excluded.name, guilds.name),
+                 member_count = COALESCE(excluded.member_count, guilds.member_count),
                  updated_at = excluded.updated_at,
-                 meta_json = excluded.meta_json""",
+                 meta_json = COALESCE(excluded.meta_json, guilds.meta_json)""",
             (str(guild_id), name, member_count, now, now,
              json.dumps(meta) if meta else None),
         )
