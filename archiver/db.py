@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS channels (
     type         INTEGER,
     position     INTEGER,
     category_id  TEXT,
+    parent_id    TEXT,
     topic        TEXT,
     nsfw         INTEGER NOT NULL DEFAULT 0,
     first_seen   TEXT NOT NULL,
@@ -167,6 +168,10 @@ CREATE TABLE IF NOT EXISTS meta (
 # private_thread(12), forum(15). Voice(2), category(4) and stage(13) cannot.
 MESSAGE_BEARING_TYPES = (0, 5, 10, 11, 12, 15)
 
+# Thread channel types (public/private thread, news thread). These nest under a
+# parent channel rather than a category, so we record parent_id separately.
+THREAD_TYPES = (10, 11, 12)
+
 
 def utcnow() -> str:
     """Current time as an ISO-8601 UTC string."""
@@ -199,6 +204,11 @@ class Database:
 
     def init_schema(self) -> None:
         self.conn.executescript(SCHEMA)
+        # Heals databases created before a column existed. CREATE TABLE IF NOT
+        # EXISTS never adds columns to an existing table, so migrate manually.
+        cols = [r[1] for r in self.conn.execute("PRAGMA table_info(channels)")]
+        if "parent_id" not in cols:
+            self.conn.execute("ALTER TABLE channels ADD COLUMN parent_id TEXT")
         self.conn.commit()
 
     def close(self) -> None:
@@ -248,22 +258,25 @@ class Database:
     def upsert_channel(self, channel_id: str, guild_id: str, name: str | None,
                        type_: int | None = None, position: int | None = None,
                        category_id: str | None = None, topic: str | None = None,
-                       nsfw: bool = False) -> None:
+                       nsfw: bool = False, parent_id: str | None = None) -> None:
         now = utcnow()
         self.conn.execute(
             """INSERT INTO channels(id, guild_id, name, type, position, category_id,
-                                    topic, nsfw, first_seen, updated_at)
-               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    parent_id, topic, nsfw, first_seen, updated_at)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                  name = excluded.name,
                  type = excluded.type,
                  position = excluded.position,
                  category_id = excluded.category_id,
+                 parent_id = excluded.parent_id,
                  topic = excluded.topic,
                  nsfw = excluded.nsfw,
                  updated_at = excluded.updated_at""",
             (str(channel_id), str(guild_id), name, type_, position,
-             str(category_id) if category_id else None, topic, int(nsfw), now, now),
+             str(category_id) if category_id else None,
+             str(parent_id) if parent_id else None,
+             topic, int(nsfw), now, now),
         )
         self.conn.commit()
 

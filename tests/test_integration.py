@@ -133,11 +133,18 @@ class TestFullPipeline(unittest.TestCase):
         self.assertTrue(all(h["author_name"] == "Bob" for h in by_author))
 
     def test_dashboard_index_renders_real_data(self):
-        html_out = create_app(self.root / "archive.sqlite3").test_client() \
-            .get("/").get_data(as_text=True)
+        c = create_app(self.root / "archive.sqlite3").test_client()
+        html_out = c.get("/").get_data(as_text=True)
         self.assertIn(GUILD_NAME, html_out)
-        self.assertIn("general", html_out)
-        self.assertIn("media", html_out)
+        # Channel names now render client-side from /api/channels so the sidebar
+        # can be grouped Discord-style; verify the API supplies them with the
+        # hierarchy fields the grouping relies on.
+        chans = c.get("/api/channels").get_json()
+        names = {ch["name"] for ch in chans}
+        self.assertIn("general", names)
+        self.assertIn("media", names)
+        self.assertTrue(all("parent_id" in ch and "category_id" in ch
+                            and "type" in ch for ch in chans))
 
     def test_dashboard_export_endpoint_returns_the_archive(self):
         c = create_app(self.root / "archive.sqlite3").test_client()

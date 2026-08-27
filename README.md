@@ -249,6 +249,27 @@ just exits with a message.
 - Give members an opt-out channel, or exclude sensitive channels by removing
   the bot's View Channel permission on them.
 
+## Slash commands (control from chat)
+
+While `listen` is running, the bot registers a `/archive` command group in your
+server so other admins can query the archive without anyone opening a terminal:
+
+- `/archive help` - list the commands (available to everyone)
+- `/archive stats` - message / channel / member / attachment counts
+- `/archive channels` - channels grouped by category, Discord-style
+- `/archive members [query]` - search the member roster
+- `/archive roles` - list roles
+- `/archive audit [limit]` - recent recorded server changes
+- `/archive search <query> [limit]` - search archived messages
+
+Data commands require **Manage Server** or **Administrator**. They read the same
+local database the dashboard uses, so other admins see the same data in chat -
+the dashboard web page itself still lives on your machine only. Commands are
+synced to the guild automatically when the bot connects.
+
+The dashboard sidebar is organised like Discord: categories as headers, channels
+beneath them, and threads nested under their parent channel.
+
 ## Releases
 
 Tagged releases live at the repo's Releases page; each ships automatic
@@ -267,7 +288,7 @@ than the moving `main`.
 python -m unittest discover -s tests -t . -v
 ```
 
-131 tests covering the storage layer (dedupe, edit/delete logging, resumable
+139 tests covering the storage layer (dedupe, edit/delete logging, resumable
 cursors, foreign-key enforcement), cold-start capture against an empty
 database, the export layer (XSS escaping, format consistency, schema
 integrity), config loading, listener scope and intents, and a full

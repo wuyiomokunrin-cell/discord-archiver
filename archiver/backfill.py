@@ -13,7 +13,8 @@ from typing import Any
 
 import discord
 
-from .capture import capture_message, channel_category_id, role_is_bot
+from .capture import (capture_message, channel_category_id, channel_parent_id,
+                      role_is_bot)
 from .db import Database
 
 log = logging.getLogger("archiver.backfill")
@@ -36,8 +37,23 @@ async def catalog_guild(db: Database, guild: discord.Guild) -> None:
             type_=getattr(getattr(ch, "type", None), "value", None),
             position=getattr(ch, "position", None),
             category_id=channel_category_id(ch),
+            parent_id=channel_parent_id(ch),
             topic=getattr(ch, "topic", None),
             nsfw=bool(getattr(ch, "nsfw", False)),
+        )
+
+    # guild.channels excludes threads; record them too so the dashboard can
+    # nest each thread under its parent channel, Discord-style.
+    for th in getattr(guild, "threads", []) or []:
+        db.upsert_channel(
+            channel_id=str(th.id), guild_id=str(guild.id),
+            name=getattr(th, "name", None),
+            type_=getattr(getattr(th, "type", None), "value", None),
+            position=getattr(th, "position", None),
+            category_id=channel_category_id(th),
+            parent_id=channel_parent_id(th),
+            topic=getattr(th, "topic", None),
+            nsfw=bool(getattr(th, "nsfw", False)),
         )
 
     for role in guild.roles:
@@ -76,6 +92,7 @@ async def backfill_channel(db: Database, channel: discord.TextChannel,
         type_=getattr(getattr(channel, "type", None), "value", None),
         position=getattr(channel, "position", None),
         category_id=channel_category_id(channel),
+        parent_id=channel_parent_id(channel),
         topic=getattr(channel, "topic", None),
         nsfw=bool(getattr(channel, "nsfw", False)),
     )

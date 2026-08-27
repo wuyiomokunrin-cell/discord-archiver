@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .db import Database
+from .db import THREAD_TYPES, Database
 
 
 def message_to_row(msg) -> dict[str, Any]:
@@ -64,6 +64,16 @@ def channel_category_id(ch) -> str | None:
     return str(cid) if cid else None
 
 
+def channel_parent_id(ch) -> str | None:
+    """Threads nest under a parent channel, not a category. Non-threads store
+    NULL so the dashboard can distinguish 'under a category' from 'a thread'."""
+    t = getattr(getattr(ch, "type", None), "value", None)
+    if t not in THREAD_TYPES:
+        return None
+    pid = getattr(ch, "parent_id", None)
+    return str(pid) if pid else None
+
+
 def ensure_guild(db: Database, msg) -> str | None:
     """Make sure the guild row exists. Returns the guild id, or None for DMs.
 
@@ -115,6 +125,7 @@ def ensure_channel(db: Database, msg) -> bool:
         type_=getattr(getattr(ch, "type", None), "value", None),
         position=getattr(ch, "position", None),
         category_id=channel_category_id(ch),
+        parent_id=channel_parent_id(ch),
         topic=getattr(ch, "topic", None),
         nsfw=bool(getattr(ch, "nsfw", False)),
     )

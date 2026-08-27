@@ -12,6 +12,7 @@ import logging
 
 import discord
 
+from . import commands as commands_mod
 from .capture import capture_message
 from .db import Database
 
@@ -47,6 +48,7 @@ class ArchiverClient(discord.Client):
         self.capture_deletes = capture_deletes
         self.mirror = mirror
         self.counters = {"messages": 0, "edits": 0, "deletes": 0, "reactions": 0, "skipped": 0, "pings": 0, "audit": 0}
+        commands_mod.setup_commands(self)
 
     # ------------------------------------------------------------------ util
 
@@ -70,6 +72,7 @@ class ArchiverClient(discord.Client):
         log.info("connected as %s (id=%s)", self.user, self.user.id)
         log.info("in %d guilds; archiving %s", len(self.guilds),
                  self.target_guild_id or "all guilds")
+        await commands_mod.sync(self)
 
     async def on_message(self, message: discord.Message) -> None:
         if not self._in_scope(getattr(message.guild, "id", None)):

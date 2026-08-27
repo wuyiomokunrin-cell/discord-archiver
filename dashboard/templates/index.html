@@ -28,6 +28,10 @@
   li:hover { background:#313338; }
   li.active { background:#3c4147; }
   li .n { color:var(--dim); font-variant-numeric:tabular-nums; }
+  li.cat { cursor:default; text-transform:uppercase; letter-spacing:.06em; font-size:11px;
+           color:var(--dim); padding:12px 8px 4px; }
+  li.cat:hover { background:none; }
+  li.thread { padding-left:26px; color:var(--dim); font-size:12px; }
   input { width:100%; padding:8px; background:var(--bg); color:var(--txt);
           border:1px solid var(--line); border-radius:4px; margin-bottom:10px; font-size:13px; }
   .tabs { display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap; }
@@ -72,13 +76,7 @@
 <main>
   <div class="side">
     <h2>Channels</h2>
-    <ul id="chans">
-      {% for c in channels %}
-        <li data-id="{{ c.id }}"><span>#{{ c.name or c.id }}</span><span class="n">{{ c.n }}</span></li>
-      {% else %}
-        <li class="muted">none</li>
-      {% endfor %}
-    </ul>
+    <ul id="chans"><li class="muted">loading…</li></ul>
   </div>
 
   <div class="content">
@@ -98,6 +96,41 @@ const results = document.getElementById('results');
 const qInput = document.getElementById('q');
 const esc = s => (s ?? '').replace(/[&<>\"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
 const hex = c => (!c ? null : '#' + (c >>> 0 & 0xffffff).toString(16).padStart(6, '0'));
+const THREAD = [10, 11, 12];
+
+// Discord-style hierarchy: categories as headers, channels beneath, threads
+// nested under their parent channel.
+function renderChannels(rows) {
+  const el = document.getElementById('chans');
+  const cats = rows.filter(r => r.type === 4)
+                   .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+  const chans = rows.filter(r => r.type !== 4 && !THREAD.includes(r.type));
+  const threads = rows.filter(r => THREAD.includes(r.type));
+  const thrBy = {}; threads.forEach(t => (thrBy[t.parent_id] = thrBy[t.parent_id] || []).push(t));
+  const byCat = {}; chans.forEach(c => (byCat[c.category_id || ''] = byCat[c.category_id || ''] || []).push(c));
+  Object.values(byCat).forEach(a => a.sort((x, y) => (x.position ?? 0) - (y.position ?? 0)));
+
+  const chanHtml = c => {
+    const icon = c.type === 15 ? '📁' : (c.type === 2 ? '🔊' : '#');
+    let h = `<li data-id="${c.id}"><span>${icon} ${esc(c.name || c.id)}</span><span class="n">${c.n}</span></li>`;
+    for (const t of (thrBy[c.id] || []))
+      h += `<li class="thread" data-id="${t.id}"><span>↳ ${esc(t.name)}</span><span class="n">${t.n}</span></li>`;
+    return h;
+  };
+
+  let html = '';
+  for (const cat of cats) {
+    html += `<li class="cat">${esc(cat.name)}</li>`;
+    for (const c of (byCat[cat.id] || [])) html += chanHtml(c);
+  }
+  if ((byCat[''] || []).length) {
+    html += `<li class="cat">Channels</li>`;
+    for (const c of byCat['']) html += chanHtml(c);
+  }
+  el.innerHTML = html || '<li class="muted">none</li>';
+}
+
+fetch('/api/channels').then(r => r.json()).then(renderChannels);
 
 function attHtml(a) {
   const isImg = (a.content_type || '').startsWith('image/');
