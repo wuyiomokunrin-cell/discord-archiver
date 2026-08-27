@@ -220,6 +220,27 @@ still prevented. Clone the same repo on both OSes; they share nothing except
 your Discord credentials, and each keeps its own `data/` folder - so a Windows
 run starts a fresh archive unless you copy `data/` across.
 
+## Run it without a terminal (autostart)
+
+`scripts/run.sh` (Linux/macOS) and `scripts\run.bat` (Windows) do the whole
+setup-and-run dance: create the venv if missing, install dependencies if
+missing, backfill **only if there is no archive yet**, then live-listen. So a
+reboot never requires retyping anything.
+
+To make it start automatically:
+
+- **Linux:** `scripts/install-autostart.sh` installs a per-user systemd service
+  with linger, so it starts at boot and restarts on failure. Control it with
+  `systemctl --user status/stop discord-archiver` and
+  `journalctl --user -u discord-archiver -f`. Remove with
+  `scripts/uninstall-autostart.sh`.
+- **Windows:** `scripts\install-autostart.bat` creates a Task Scheduler task
+  that runs the launcher at logon. Remove with `scripts\uninstall-autostart.bat`.
+
+Because `run.*` is idempotent and the run lock refuses a second instance, it is
+safe to let it fire on every boot and also start one by hand - the second one
+just exits with a message.
+
 ## Privacy
 
 - `data/` and `.env` are git-ignored. The database contains other people's
