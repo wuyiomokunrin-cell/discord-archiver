@@ -220,3 +220,61 @@ class TestStats(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBackfillProgress(unittest.TestCase):
+    def setUp(self):
+        self.db = Database(":memory:")
+        self.db.upsert_guild(111, "Test Server")
+        for i, (cid, name, ctype) in enumerate(
+                [(222, "general", 0), (223, "media", 0),
+                 (224, "announcements", 5), (225, "voice", 2)]):
+            self.db.upsert_channel(cid, 111, name, type_=ctype, position=i)
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_reports_every_text_channel(self):
+        rows = self.db.backfill_progress("111")
+        # voice (type 2) is excluded; text and announcement are not
+        self.assertEqual([r["name"] for r in rows],
+                         ["general", "media", "announcements"])
+
+    def test_unstarted_channel_reads_as_pending(self):
+        rows = {r["name"]: r for r in self.db.backfill_progress("111")}
+        self.assertEqual(rows["general"]["complete"], 0)
+        self.assertEqual(rows["general"]["archived"], 0)
+        self.assertIsNone(rows["general"]["oldest"])
+
+    def test_partial_backfill_is_still_pending(self):
+        """A cursor exists but complete=0, which is the resumed-mid-run state."""
+        self.db.set_backfill_cursor(223, "1900", increment=50)
+        rows = {r["name"]: r for r in self.db.backfill_progress("111")}
+        self.assertEqual(rows["media"]["complete"], 0)
+        self.assertEqual(rows["media"]["counted"], 50)
+
+    def test_complete_flag_reflects_mark_backfill_complete(self):
+        self.db.mark_backfill_complete(222)
+        rows = {r["name"]: r for r in self.db.backfill_progress("111")}
+        self.assertEqual(rows["general"]["complete"], 1)
+        self.assertEqual(rows["media"]["complete"], 0)
+
+    def test_archived_count_and_date_range_come_from_messages(self):
+        from datetime import datetime, timezone
+        self.db.upsert_channel(222, 111, "general", type_=0, position=0)
+        for i, ts in enumerate(["2026-01-01", "2026-06-15", "2026-08-27"]):
+            self.db.insert_message(dict(
+                id=1000 + i, channel_id=222, guild_id=111, author_id=333,
+                author_name="a", content=f"m{i}",
+                timestamp=datetime.fromisoformat(ts + "T00:00:00+00:00")))
+        row = {r["name"]: r for r in self.db.backfill_progress("111")}["general"]
+        self.assertEqual(row["archived"], 3)
+        self.assertTrue(row["oldest"].startswith("2026-01-01"))
+        self.assertTrue(row["newest"].startswith("2026-08-27"))
+
+    def test_guild_filter(self):
+        self.db.upsert_guild(999, "Other")
+        self.db.upsert_channel(888, 999, "elsewhere", type_=0, position=0)
+        self.assertEqual(len(self.db.backfill_progress("111")), 3)
+        self.assertEqual(len(self.db.backfill_progress("999")), 1)
+        self.assertEqual(len(self.db.backfill_progress(None)), 4)

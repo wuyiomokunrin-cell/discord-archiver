@@ -69,6 +69,7 @@ cp .env.example .env    # then fill in DISCORD_BOT_TOKEN and DISCORD_GUILD_ID
 | `python main.py export` | no | Write JSON + CSV + HTML. |
 | `python main.py info` | no | Write the server-info report. |
 | `python main.py stats` | no | Print archive counts. |
+| `python main.py progress` | no | Per-channel backfill status. |
 | `python main.py dashboard` | no | Serve the local dashboard. |
 
 Typical first run:
@@ -83,7 +84,25 @@ Then `python main.py listen` whenever you want live capture running. Ctrl-C
 stops it cleanly and flushes any pending attachment downloads.
 
 `backfill` handles SIGINT as a pause: kill it mid-run and restart, and it resumes
-from the last checkpoint rather than re-reading the channel.
+from the last checkpoint rather than re-reading the channel. It prints an
+explicit `BACKFILL COMPLETE` or `BACKFILL PAUSED` block at the end so you are
+not left guessing whether it finished.
+
+`python main.py progress` answers "is it done yet?" from another terminal while
+a backfill is running:
+
+```
+$ python main.py progress
+2 of 9 channels fully backfilled
+
+  CHANNEL                           MESSAGES  OLDEST               STATUS
+  ------------------------------------------------------------------------------
+  #general                             18420  2023-04-02 11:16:00  done
+  #media                                3102  2023-05-19 09:02:00  done
+  #off-topic                               0  -                    PENDING
+
+  -> 7 channel(s) still pending. Re-run `python main.py backfill` to resume.
+```
 
 ## How it works
 
@@ -168,7 +187,7 @@ Worth knowing before you rely on the output:
 python -m unittest discover -s tests -t . -v
 ```
 
-80 tests covering the storage layer (dedupe, edit/delete logging, resumable
+86 tests covering the storage layer (dedupe, edit/delete logging, resumable
 cursors, foreign-key enforcement), cold-start capture against an empty
 database, the export layer (XSS escaping, format consistency, schema
 integrity), config loading, listener scope and intents, and a full

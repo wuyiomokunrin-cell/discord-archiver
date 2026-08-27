@@ -15,6 +15,7 @@ import asyncio
 import logging
 import signal
 import sys
+import time
 from pathlib import Path
 
 import discord
@@ -51,6 +52,17 @@ async def _resolve_guild(client: discord.Client, guild_id: int) -> discord.Guild
             f"Guild {guild_id} is not accessible. Is the bot still a member?"
         )
     return guild
+
+
+def _fmt_duration(seconds: float) -> str:
+    seconds = int(seconds)
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h {m}m {s}s"
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
 
 
 def _die(headline: str, what_to_do: str) -> None:
@@ -141,8 +153,10 @@ async def _backfill_body(client: discord.Client, db: Database, cfg) -> None:
         except NotImplementedError:
             pass  # Windows
 
+    started = time.monotonic()
     log.info("starting backfill of %s (Ctrl-C to pause; it resumes)", guild.name)
     result = await backfill_guild(db, guild, batch=cfg.backfill_batch, stop=stop)
+    elapsed = time.monotonic() - started
 
     for r in result["results"]:
         if r.get("skipped"):
@@ -157,7 +171,32 @@ async def _backfill_body(client: discord.Client, db: Database, cfg) -> None:
             db, cfg.attachments_dir, max_concurrent=cfg.max_concurrent_downloads)
         log.info("attachments: %s", stats)
 
-    log.info("archive totals: %s", db.stats(str(cfg.guild_id)))
+    remaining = db.channels_needing_backfill(str(cfg.guild_id))
+    totals = db.stats(str(cfg.guild_id))
+
+    # An explicit terminal line. Without this the run just ends on a dict of
+    # counts and it is not obvious whether it finished or stopped early.
+    print()
+    if stop.is_set() or remaining:
+        print("=" * 62)
+        print("  BACKFILL PAUSED - not finished")
+        print(f"  {len(remaining)} channel(s) still to do: "
+              + ", ".join("#" + (c["name"] or c["id"]) for c in remaining[:8])
+              + (" ..." if len(remaining) > 8 else ""))
+        print("  Re-run `python main.py backfill` to resume from the checkpoint.")
+        print("=" * 62)
+    else:
+        print("=" * 62)
+        print("  BACKFILL COMPLETE")
+        print(f"  {totals['messages']} messages across "
+              f"{len(result['results'])} channels")
+        print(f"  {totals['attachments_downloaded']}/{totals['attachments']} "
+              f"attachments downloaded")
+        print(f"  finished in {_fmt_duration(elapsed)}")
+        print("  Run `python main.py dashboard` to browse it.")
+        print("=" * 62)
+    print()
+    log.info("archive totals: %s", totals)
 
 
 async def _listen_body(client: discord.Client, db: Database, cfg) -> None:
@@ -243,6 +282,38 @@ def cmd_stats(cfg, args) -> None:
     db.close()
 
 
+def cmd_progress(cfg, args) -> None:
+    """Per-channel backfill status: the answer to 'is it finished yet?'."""
+    db = Database(cfg.db_path)
+    rows = db.backfill_progress(str(cfg.guild_id) if cfg.guild_id else None)
+    if not rows:
+        print("No channels recorded yet. Run `python main.py backfill` first.")
+        db.close()
+        return
+
+    done = [r for r in rows if r["complete"]]
+    print(f"{len(done)} of {len(rows)} channels fully backfilled\n")
+    print(f"  {'CHANNEL':32s} {'MESSAGES':>9s}  {'OLDEST':19s}  STATUS")
+    print("  " + "-" * 78)
+    for r in rows:
+        name = "#" + (r["name"] or r["id"])
+        status = "done" if r["complete"] else "PENDING"
+        oldest = (r["oldest"] or "-").replace("T", " ")[:19]
+        print(f"  {name[:32]:32s} {r['archived']:>9d}  {oldest:19s}  {status}")
+
+    print()
+    totals = db.stats(str(cfg.guild_id) if cfg.guild_id else None)
+    print(f"  total messages: {totals['messages']}")
+    print(f"  attachments:    {totals['attachments_downloaded']}"
+          f"/{totals['attachments']} downloaded")
+    if len(done) == len(rows):
+        print("\n  -> backfill is complete for every channel.")
+    else:
+        print(f"\n  -> {len(rows) - len(done)} channel(s) still pending."
+              " Re-run `python main.py backfill` to resume.")
+    db.close()
+
+
 def cmd_attachments(cfg, args) -> None:
     db = Database(cfg.db_path)
     pending = db.pending_attachments(limit=10_000)
@@ -284,6 +355,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("stats", help="print archive counts")
 
+    sub.add_parser("progress", help="show per-channel backfill status")
+
     a = sub.add_parser("attachments", help="download pending attachments")
     a.set_defaults(func=cmd_attachments)
 
@@ -322,6 +395,8 @@ def main(argv: list[str] | None = None) -> int:
         cmd_info(cfg, args)
     elif args.command == "stats":
         cmd_stats(cfg, args)
+    elif args.command == "progress":
+        cmd_progress(cfg, args)
     elif args.command == "attachments":
         cmd_attachments(cfg, args)
     elif args.command == "dashboard":

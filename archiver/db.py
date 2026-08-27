@@ -484,6 +484,24 @@ class Database:
             (str(guild_id),),
         ).fetchall()
 
+    def backfill_progress(self, guild_id: str | None = None) -> list[sqlite3.Row]:
+        """Per-channel backfill status, for answering 'is it finished yet?'."""
+        return self.conn.execute(
+            """SELECT c.id, c.name, c.type,
+                      COALESCE(s.backfill_complete, 0) AS complete,
+                      COALESCE(s.backfill_message_count, 0) AS counted,
+                      (SELECT COUNT(*) FROM messages m WHERE m.channel_id = c.id) AS archived,
+                      (SELECT MIN(m.timestamp) FROM messages m WHERE m.channel_id = c.id) AS oldest,
+                      (SELECT MAX(m.timestamp) FROM messages m WHERE m.channel_id = c.id) AS newest
+               FROM channels c
+               LEFT JOIN sync_state s ON s.channel_id = c.id
+               WHERE c.type IN (0, 5, 15)
+                 AND (? IS NULL OR c.guild_id = ?)
+               ORDER BY c.position, c.id""",
+            (str(guild_id) if guild_id else None,
+             str(guild_id) if guild_id else None),
+        ).fetchall()
+
     # -------------------------------------------------------------- queries
 
     def iter_messages(self, channel_id: str | None = None,
