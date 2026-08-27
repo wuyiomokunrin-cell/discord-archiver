@@ -5,6 +5,11 @@
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
+# Self-heal: earlier releases shipped these without the executable bit, which
+# makes systemd fail with 203/EXEC. Ensure they are runnable.
+chmod +x "$DIR/scripts/run.sh" "$DIR/scripts/install-autostart.sh" \
+         "$DIR/scripts/uninstall-autostart.sh" 2>/dev/null || true
+
 if ! command -v systemctl >/dev/null 2>&1; then
     echo "systemctl not found - cannot install autostart." >&2
     echo "You can still run scripts/run.sh by hand." >&2
